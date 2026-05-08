@@ -1,0 +1,120 @@
+schema: spec-driven
+
+context: |
+  Project: Ash Nazg — Universal Application Runtime for Nextcloud
+  Tagline: One app to run them all.
+
+  What it is:
+    A Nextcloud ExApp (External App, AppAPI-distributed) that lets users upload
+    arbitrary binaries to their Files and execute them inside sandboxed
+    runtime engines, with output written back into Files. The MVP targets
+    legacy software preservation: DOSBox-X for DOS and Windows 3.x programs,
+    streamed to the browser via KasmVNC inside a Nextcloud iframe.
+
+    Demo target: upload `windows311.img` and `keen1.exe` to a Nextcloud folder,
+    click Run, get Commander Keen and Windows 3.11 Program Manager rendered
+    inside the Nextcloud UI, with file open/save going back into Nextcloud
+    Files via a WebDAV mount.
+
+  Architectural model:
+    - Plugin-based engine dispatcher. The host detects binary type via magic
+      bytes / extension and routes to a sidecar engine container.
+    - Engines are independently versioned OCI images. Admin enables/disables
+      engines at install time via Nextcloud admin UI.
+    - MVP ships ONE engine: dosbox-x. Wine, RetroArch, JVM, wasmtime, etc.
+      are explicitly out of scope for v1 — the architecture must accommodate
+      them as future drop-ins without refactor.
+    - User content (binaries, ROM-equivalents, OS images) is NEVER bundled.
+      Users bring their own legally-obtained software. The runtime is legal;
+      the content is the user's responsibility.
+
+  Distribution:
+    - Published to the Nextcloud App Store as an ExApp.
+    - info.xml uses <external-app><docker-install> pointing at a public
+      OCI registry (ghcr.io/mwest2020/ash-nazg or similar).
+    - Requires AppAPI >= 5.0 and the HaRP deploy daemon (websocket support
+      is mandatory for the streaming layer; Docker Socket Proxy is NOT
+      sufficient).
+
+  Tech stack:
+    - Host container (the ExApp itself): Python 3.12 with FastAPI for the
+      AppAPI integration shim. Reason: AppAPI's reference ExApps are Python,
+      pyfastapi-nextcloud helpers exist, ecosystem alignment.
+    - Engine container (dosbox-x sidecar): Debian slim base + dosbox-x +
+      KasmVNC + a small supervisor. No Python in the engine image.
+    - Frontend (Files action + iframe host): Vue 3 + TypeScript, follows
+      Nextcloud's @nextcloud/vue component library and Nextcloud frontend
+      conventions.
+    - Storage: WebDAV mount via davfs2 from inside the engine container,
+      authenticated using the per-session token AppAPI provides.
+    - Build/CI: GitHub Actions, multi-arch images (amd64 + arm64) pushed
+      to GHCR.
+
+  Security posture (boring, auditable):
+    - Admin-only execution in v1. No user-level run permission.
+    - One engine container per user session. Container is destroyed on
+      session end (idle timeout default 15 minutes, configurable).
+    - No host network by default. Engine container has only the WebDAV
+      mount and the websocket endpoint exposed to the host.
+    - Resource limits enforced at container level: 1 CPU, 1 GB RAM,
+      no GPU access in MVP.
+    - All execution events logged to Nextcloud's audit log via the
+      OCS API: who ran what (sha256 of binary), when, exit status,
+      duration, peak memory.
+    - No bundled content: no Win 3.11 image, no ROMs, no BIOS files.
+      Documentation explains how users provide their own.
+
+  Naming and trademarks:
+    - Project name "Ash Nazg" is a Tolkien Black Speech reference,
+      used nominatively (homage), explicitly disclaimed as not affiliated
+      with the Tolkien Estate. Standard fan-project disclaimer in README
+      and LICENSE.
+    - Avoid Microsoft, Sony, Nintendo trademarks in product naming,
+      UI strings, and marketing copy. "Run Windows applications" is OK;
+      "Windows-compatible runtime for Nextcloud" is OK; calling the product
+      "WinRunner" is NOT OK.
+
+  Out of scope for v1 (explicit non-goals):
+    - Wine engine, RetroArch engine, JVM engine, wasmtime engine.
+    - Multi-user concurrent execution beyond admin-only single-session.
+    - Audio routing from engine to browser.
+    - GPU acceleration.
+    - Job scheduling, file-watch triggers, cron.
+    - User-level "My Apps" tile UI (the metadata-extraction polish layer).
+    - Icon extraction from PE/ELF/jar metadata.
+    - OCI bring-your-own-image engine.
+    - SaaS or hosted offering.
+
+rules:
+  proposal:
+    - State the user-visible demo concretely (e.g., "user uploads keen1.exe
+      and sees it running in their browser within 30 seconds").
+    - Identify which engine(s) the change touches; if it's the dispatcher
+      or the host shim, say so explicitly.
+    - Call out any change to the security posture (admin-only, resource
+      limits, audit logging) — these need extra review.
+    - Include a "boring valkuil" section: where could we be tempted to
+      do something clever instead of standard? Default to standard.
+
+  specs:
+    - Use Given/When/Then format for scenarios.
+    - Every requirement maps to at least one acceptance scenario.
+    - Distinguish host (the ExApp container) from engine (the sidecar)
+      in every requirement — these have different security models.
+    - For any user-uploaded content: explicitly state validation rules
+      (magic bytes, size limits, refused formats).
+
+  design:
+    - Include a sequence diagram (or sequence-as-text) for the upload→detect→
+      dispatch→execute→stream→writeback flow.
+    - Document the AppAPI integration points used (which scopes, which
+      endpoints, which webhook events).
+    - For each engine added: document the OCI base image, the streaming
+      protocol (KasmVNC, noVNC, etc.), the file-mount strategy.
+
+  tasks:
+    - Group tasks by component: host-shim, engine-dosbox, frontend-files-action,
+      frontend-iframe-host, ci, docs.
+    - Each task is independently testable.
+    - First task in any change must be: "verify the change is implementable
+      against current AppAPI version" with a concrete check command.
