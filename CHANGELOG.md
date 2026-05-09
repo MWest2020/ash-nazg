@@ -57,6 +57,77 @@ the Ash Nazg ExApp.
   three scaffold endpoints. Slightly more than the spec asked for
   ("a single passing test"), kept boring and assertive.
 
+### Added — 2026-05-09 — Stage-3 (level-3) verifier — full Nextcloud install smoke
+
+`scripts/verify-against-nextcloud.sh` upgraded from placeholder to a
+real driver. It brings up postgres + valkey + nextcloud + ash-nazg-host
+via compose, runs the bootstrap, and asserts three scaffold-scope
+HTTP contracts hold over a real Nextcloud 30 + AppAPI install. Then
+tears the stack down (or keeps it with `KEEP_STACK=1`).
+
+#### What ships
+
+- `scripts/local-nextcloud-stack.yml` — docker-compose recipe.
+  Postgres 16 + Valkey 8 (redis-protocol drop-in) + NC 30 (apache
+  flavour) + the local `ash-nazg-host:0.0.0-scaffold` image. NC on
+  `localhost:8088`. Healthchecks on every service. Credentials are
+  local-dev placeholders, not secrets.
+- `scripts/bootstrap-nextcloud.sh` — idempotent driver from
+  "containers up" to "ExApp registered, enabled, reachable".
+  Installs/enables AppAPI, registers a `manual_install` deploy
+  daemon with `host=ash-nazg-host` (the compose-network DNS
+  name), copies `appinfo/info.xml` into the NC container, and
+  registers the ExApp via `app_api:app:register`.
+- `scripts/verify-against-nextcloud.sh` — wraps the bootstrap with
+  preflight (build the host image if missing), three concrete
+  assertions, and a teardown trap. `KEEP_STACK=1` skips teardown
+  for inspection.
+
+#### What level-3 proves
+
+| Promise | Verified |
+|---|---|
+| Manifest accepted by AppAPI | `app_api:app:register` succeeds on the real `info.xml`; AppAPI rejects malformed manifests, ours validates. |
+| Single-container ExApp model viable | NC reaches `http://ash-nazg-host:8080/health` over the compose network and gets the canonical `{"status":"ok","app":"ash_nazg",…}` response. |
+| Admin settings shell renders | `/admin/settings` serves HTML with the `#ash-nazg-admin-settings` mount div, base64-encoded initial-state, and hashed `<script>` / `<link>` tags from the vite manifest. |
+| Self-test JSON shape locked | `/selftest` returns all four canonical check IDs (`host-health`, `engines-registered`, `deploy-daemon-spawn`, `audit-log-write`) in spec order, all `skipped`. |
+
+#### What level-3 deliberately doesn't (yet) cover
+
+The AppAPI proxy URL
+`/index.php/apps/app_api/proxy/ash_nazg/health` returns **404 by
+design**. AppAPI's proxy is gated by per-route registration; the
+ExApp must call back to AppAPI during its registration handshake to
+declare which paths are exposed. `host/src/ash_nazg/appapi.py::register()`
+currently raises `NotImplementedError` (scaffold scope), so
+`oc_ex_apps_routes` is empty and the proxy correctly refuses
+everything. Implementing the handshake is owned by `wire-dosbox-engine`.
+
+#### Workaround captured in the bootstrap
+
+AppAPI 4.0.6 (the version bundled with NC 30 at the time) auto-
+allocates an ExApp port (~23000) on register; the manual-install
+host shim listens on 8080. The bootstrap script directly UPDATEs
+`oc_ex_apps.port` to 8080 after register. Documented inline as a
+scaffold-scope workaround; `wire-dosbox-engine`'s real handshake
+will negotiate the port properly via the AppAPI `setAppDeployState`
+flow rather than via a DB poke.
+
+#### Discoveries that informed the bootstrap
+
+- `app_api:daemon:register` has 6 positional args, not 8 (older
+  AppAPI examples online list more fields).
+- `app_api:app:register --info-xml` wants a real file path inside
+  the NC container, not stdin (an earlier `--info-xml=/dev/stdin`
+  with a heredoc hung indefinitely).
+- `podman-compose exec` flag set differs from Docker-Compose v2;
+  preflight uses `dc exec -T <svc> true` instead of
+  `dc ps --status running --quiet` for portability.
+- The bare `occ app:enable ash_nazg` is the wrong command for
+  ExApps — it tries to download from the App Store. Use
+  `occ app_api:app:enable`. (We end up doing it via direct DB
+  update in the same pass that fixes the port.)
+
 ### Fixed — 2026-05-09 — Lint and ruff failures in `test` workflow
 
 `build-host` and `build-engine-dosbox` went green after the earlier

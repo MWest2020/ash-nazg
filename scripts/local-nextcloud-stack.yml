@@ -1,0 +1,125 @@
+# scripts/local-nextcloud-stack.yml
+#
+# LEVEL 3 verifier — local Nextcloud stack for smoke-testing Ash Nazg.
+#
+# Stand up Nextcloud 30 + AppAPI + a manually-deployed Ash Nazg
+# host container, register the ExApp, and check that the admin
+# settings page renders. No HaRP, no FRP, no docker-socket
+# exposure — AppAPI's `manual_install` deploy daemon is enough for
+# a single ExApp on a shared compose network.
+#
+#   Usage:
+#     docker compose -f scripts/local-nextcloud-stack.yml up -d
+#     ./scripts/bootstrap-nextcloud.sh
+#     # browse to http://localhost:8088 (admin / admin)
+#
+#   Teardown:
+#     docker compose -f scripts/local-nextcloud-stack.yml down -v
+#
+# Caveats:
+# - Credentials in this file are LOCAL DEV ONLY. Never reuse them.
+# - Ports: NC on 8088, postgres + valkey internal-only.
+# - The `localhost/ash-nazg-host:0.0.0-scaffold` image must exist
+#   locally before `up`. Build it with:
+#     docker build -t localhost/ash-nazg-host:0.0.0-scaffold \
+#                  -f host/Dockerfile .
+
+services:
+
+  postgres:
+    image: docker.io/library/postgres:16-alpine
+    environment:
+      POSTGRES_DB: nextcloud
+      POSTGRES_USER: nextcloud
+      POSTGRES_PASSWORD: nextcloud-local-dev
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    networks: [ash-nazg-net]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U nextcloud -d nextcloud"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  valkey:
+    image: docker.io/valkey/valkey:8-alpine
+    # Disable persistence — local dev cache only, no need for an
+    # AOF or RDB on disk.
+    command: ["valkey-server", "--save", "", "--appendonly", "no"]
+    volumes:
+      - valkey-data:/data
+    networks: [ash-nazg-net]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "valkey-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  nextcloud:
+    image: docker.io/library/nextcloud:30-apache
+    ports:
+      - "8088:80"
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_DB: nextcloud
+      POSTGRES_USER: nextcloud
+      POSTGRES_PASSWORD: nextcloud-local-dev
+      # NC's official image talks to redis via these env vars; valkey
+      # speaks the redis wire protocol so the existing names work.
+      REDIS_HOST: valkey
+      REDIS_HOST_PORT: 6379
+      NEXTCLOUD_ADMIN_USER: admin
+      NEXTCLOUD_ADMIN_PASSWORD: admin-local-dev
+      NEXTCLOUD_TRUSTED_DOMAINS: localhost 127.0.0.1
+      OVERWRITEHOST: localhost:8088
+      OVERWRITEPROTOCOL: http
+      # AppAPI talks to the host shim by its compose-network name.
+      # No reason to expose the shim externally for the smoke test.
+      AA_VERSION: latest
+    depends_on:
+      postgres:
+        condition: service_healthy
+      valkey:
+        condition: service_healthy
+    volumes:
+      - nextcloud-data:/var/www/html
+    networks: [ash-nazg-net]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1/status.php >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 60s
+
+  # Ash Nazg host shim — the ExApp container itself.
+  # AppAPI reaches it via the compose-network DNS name `ash-nazg-host`.
+  ash-nazg-host:
+    image: localhost/ash-nazg-host:0.0.0-scaffold
+    environment:
+      APP_HOST: 0.0.0.0
+      APP_PORT: "8080"
+      APP_VERSION: "0.0.0"
+      # AppAPI hands a real shared secret on register — for the smoke
+      # test this placeholder is fine; the host doesn't validate it
+      # until wire-dosbox-engine implements the handshake.
+      APP_SECRET: "scaffold-secret-not-real"
+      NEXTCLOUD_URL: http://nextcloud
+    networks: [ash-nazg-net]
+    depends_on:
+      - nextcloud
+    restart: unless-stopped
+    # Not exposing 8080 externally — AppAPI talks to it on the
+    # compose network. Uncomment if you want to curl it directly:
+    # ports: ["18080:8080"]
+
+networks:
+  ash-nazg-net:
+    driver: bridge
+
+volumes:
+  postgres-data: {}
+  valkey-data: {}
+  nextcloud-data: {}
