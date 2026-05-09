@@ -57,6 +57,99 @@ the Ash Nazg ExApp.
   three scaffold endpoints. Slightly more than the spec asked for
   ("a single passing test"), kept boring and assertive.
 
+### Fixed — 2026-05-09 — Stage-1 smoke test discoveries
+
+Built the host container locally with podman, ran it, and probed
+every endpoint. The smoke caught eight real issues that the
+scaffold's lint/typecheck/`openspec validate` had not.
+
+#### Container build path
+
+- `host/pyproject.toml` — removed `readme = "../README.md"`.
+  Hatchling validated the path at build time and failed because
+  the README is outside the `host/` build context. Fixed by
+  dropping the field; the package's narrative lives in repo-root
+  README and `host/` is private build content anyway.
+- `host/.dockerignore` — un-excluded `static/`. The earlier
+  comment said "mounted at runtime, not baked in", but the
+  AppStore ExApp model is a single self-contained image; bundling
+  the frontend inside the host image is what AppAPI actually
+  deploys. The `.dockerignore` now documents this explicitly.
+- `host/Dockerfile` — added `COPY static/ /app/static/` in the
+  runtime stage. With the `.dockerignore` flip and the COPY,
+  `host/static/manifest.json` and the hashed JS/CSS bundles are
+  now part of the image at `/app/static/...`.
+- `host/uv.lock` — committed for the first time. Generated via
+  `uv lock` against `host/pyproject.toml`. 35 resolved packages.
+  The Dockerfile's `--frozen` path is now the always-taken branch;
+  the warning fallback is dormant.
+
+#### Frontend API drift
+
+The original `frontend/package.json` pinned the @nextcloud/* line
+that targets Vue 2.7 + composition API (NC ≤ 30 default frontend).
+Bumping to Vue 3 surfaced the actual current Nextcloud-30+
+versions:
+
+| Package                   | Old   | New   |
+|---------------------------|-------|-------|
+| `@nextcloud/vue`          | ^8.21 | ^9.8  |
+| `@nextcloud/dialogs`      | ^6.1  | ^7.3  |
+| `@nextcloud/files`        | ^3.10 | ^4.0  |
+| `@nextcloud/initial-state`| ^2.2  | ^3.0  |
+| `@nextcloud/eslint-config`| ^9.0  | ^8.4  |
+
+(`@nextcloud/eslint-config@9` is RC-only on the registry; latest
+stable is 8.4.2.)
+
+API changes that came with the bumps:
+
+- `frontend/src/files-action.ts` — `new FileAction({...})` is gone
+  in `@nextcloud/files@4`. `registerFileAction` now takes a plain
+  object matching the `IFileAction` interface; callbacks receive
+  `ActionContext` / `ActionContextSingle` (the node lives at
+  `context.nodes[0]`, not as a direct argument). Rewrote the file
+  to match.
+- `frontend/src/AdminSettings.vue` — `NcButton type="primary"` is
+  no longer the visual variant: in `@nextcloud/vue@9`, `type` is
+  the HTML button type (`'submit' | 'reset' | 'button'`) and the
+  visual variant moved to a `variant` prop. Changed to
+  `variant="primary"`.
+- `frontend/vite.config.ts` — Vite 5+ writes the manifest to
+  `<outDir>/.vite/manifest.json` by default. The host's
+  `admin_settings.py` reads `<outDir>/manifest.json`. Set
+  `manifest: 'manifest.json'` to keep it at the root and out of
+  Vite's internal subdirectory.
+
+#### Lockfiles
+
+- `frontend/package-lock.json` — committed. 626 packages,
+  registry signatures verified via `npm audit signatures`. Five
+  moderate audit findings, all dev-only (`vite`'s bundled
+  `esbuild` dev-server CORS bypass; `@nextcloud/eslint-plugin`'s
+  `fast-xml-parser` XML escaping). `npm audit --omit=dev` returns
+  zero. Per repo rules these were not auto-fixed; the upgrade
+  path is breaking (`vite@8`, `eslint-config@6`) so we wait.
+
+#### Smoke-test result (after fixes)
+
+Every endpoint behaves as designed when the host container runs
+locally:
+
+```
+GET  /health            → 200 {"status":"ok","app":"ash_nazg","version":"0.0.0"}
+GET  /heartbeat         → 200 ok (text/plain)
+POST /run               → 501 {"error":"not_implemented", ...}
+POST /selftest          → 200 canonical 4-check skipped JSON, IDs in spec order
+GET  /admin/settings    → 200 HTML shell with base64 initial-state +
+                              hashed bundle <script>/<link> tags
+GET  /static/js/...     → 200 25 kB admin-settings JS, 2.9 kB files-action JS
+GET  /static/assets/... → 200 17.9 kB CSS
+GET  /static/missing    → 404
+```
+
+Container runs as non-root `app:1000`. Image is 166 MB.
+
 ### Added — 2026-05-09 — Open `wire-dosbox-engine` change (§10.1)
 
 Successor change scaffolded so the next session has a real

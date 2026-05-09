@@ -21,5 +21,7 @@ tests/
 *.swp
 .DS_Store
 
-# Static frontend bundle is mounted at runtime, not baked in.
-static/
+# NOTE: static/ is intentionally NOT excluded — the frontend bundle
+# (vite output) is baked into the image so the App Store distribution
+# is a single self-contained container. Built locally with
+# `cd frontend && npm run build` before docker build.

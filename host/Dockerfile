@@ -43,6 +43,11 @@ WORKDIR /app
 COPY --from=builder /app/.venv /app/.venv
 COPY --from=builder /app/src   /app/src
 
+# Frontend bundle. Built outside the image with `npm run build` (vite
+# emits to host/static/) before `docker build`. Optional — if absent,
+# admin_settings.py renders a "not built yet" warning.
+COPY static/ /app/static/
+
 ENV PATH="/app/.venv/bin:${PATH}" \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \

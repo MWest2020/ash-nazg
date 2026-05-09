@@ -24,7 +24,10 @@ export default defineConfig({
 	build: {
 		outDir: HOST_STATIC_DIR,
 		emptyOutDir: true,
-		manifest: true,
+		// Write manifest at the root of the output dir, not under .vite/,
+		// so the host's admin_settings.py can read host/static/manifest.json
+		// without knowing about Vite's internal layout.
+		manifest: 'manifest.json',
 		sourcemap: true,
 		rollupOptions: {
 			input: {

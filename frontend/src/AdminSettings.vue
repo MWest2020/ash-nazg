@@ -63,7 +63,7 @@ function runSelfTest(): void {
 		/>
 
 		<div class="ash-nazg-actions">
-			<NcButton type="primary" @click="save">
+			<NcButton variant="primary" @click="save">
 				{{ t('ash_nazg', 'Save') }}
 			</NcButton>
 			<NcButton @click="runSelfTest">

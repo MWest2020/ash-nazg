@@ -9,9 +9,21 @@
  * host) lands in the `wire-dosbox-engine` change. This file only sets
  * up the action surface so the wiring change has a stable place to
  * hook into.
+ *
+ * API note (@nextcloud/files 4.x): `registerFileAction` takes a plain
+ * object matching the `IFileAction` interface. There is no `FileAction`
+ * class; every callback receives an `ActionContext` / `ActionContextSingle`.
  */
 
-import { FileAction, registerFileAction, type Node } from '@nextcloud/files'
+import {
+	registerFileAction,
+	type IFileAction,
+} from '@nextcloud/files'
+import type {
+	ActionContext,
+	ActionContextSingle,
+	INode,
+} from '@nextcloud/files'
 import { getCurrentUser } from '@nextcloud/auth'
 import { showInfo } from '@nextcloud/dialogs'
 import { emit } from '@nextcloud/event-bus'
@@ -37,35 +49,39 @@ function isCurrentUserAdmin(): boolean {
 	return Boolean((user as unknown as { isAdmin?: boolean }).isAdmin)
 }
 
-function hasRunnableExtension(node: Node): boolean {
+function hasRunnableExtension(node: INode): boolean {
 	const name = node.basename.toLowerCase()
 	return RUNNABLE_EXTENSIONS.some((ext) => name.endsWith(`.${ext}`))
 }
 
-const action = new FileAction({
+const action: IFileAction = {
 	id: 'ash_nazg-run',
 
 	displayName: () => t(APP_ID, 'Run with Ash Nazg'),
 
 	// SVG icon lands in `wire-dosbox-engine`. Empty string is a valid
-	// FileAction icon — it just renders without one.
+	// IFileAction icon — it just renders without one.
 	iconSvgInline: () => '',
 
-	enabled: (nodes) => {
+	enabled: (context: ActionContext): boolean => {
 		if (!isCurrentUserAdmin()) {
 			return false
 		}
-		if (nodes.length !== 1) {
+		if (context.nodes.length !== 1) {
 			return false
 		}
-		const node = nodes[0]
+		const node = context.nodes[0]
 		if (!node || !node.size || node.size > MAX_BINARY_SIZE_BYTES) {
 			return false
 		}
 		return hasRunnableExtension(node)
 	},
 
-	exec: async (node) => {
+	exec: async (context: ActionContextSingle) => {
+		const node = context.nodes[0]
+		if (!node) {
+			return false
+		}
 		showInfo(
 			t(
 				APP_ID,
@@ -77,6 +93,6 @@ const action = new FileAction({
 		// own UX (no further file-list navigation needed).
 		return null
 	},
-})
+}
 
 registerFileAction(action)
