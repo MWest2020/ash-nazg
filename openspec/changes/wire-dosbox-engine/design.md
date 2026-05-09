@@ -40,6 +40,103 @@ Browser              Host shim                     Deploy daemon (HaRP)         
 - Admin settings can disable individual engines; the registry
   filters disabled engines out of dispatch.
 
+## AppAPI 5.x manual-install — finding from the test-target migration
+
+The test-target migration to NC 32 + AppAPI 5.x (task §4c) ran the
+existing `verify-against-nextcloud.sh` against the new target and
+surfaced a real architectural constraint that flips the assumption
+this design.md was originally written under.
+
+### What we believed (in the proposal)
+
+> *"AppAPI 5.x ships a real registration handshake where the
+> ExApp advertises its listen port (and routes, scopes, etc.) back
+> to AppAPI."*
+
+### What AppAPI 5.x actually does
+
+In `manual-install` mode AppAPI **always auto-allocates** the
+ExApp port (~23000 in our test). After `app_api:app:register`
+returns, AppAPI synchronously heartbeat-checks the ExApp at
+`<daemon-host or inferred>:<allocated-port>`. The check fails
+loudly when nothing is listening there, but neither the
+`--info-xml` block, nor the `<port>` field of `info.xml`, nor the
+`--env APP_PORT=...` flag, nor a `host: null` daemon, persuade
+AppAPI to use a different port.
+
+Verified with two daemon variants:
+
+| Daemon `host` | Result |
+|---|---|
+| `ash-nazg-host` (compose DNS) | Register hangs / times out polling `ash-nazg-host:23000` |
+| `null` (per AppAPI's own `--help` example) | Same: register completes with `"Heartbeat check failed"`; ExApp registered but disabled |
+
+`oc_ex_apps.port = 23000` in both cases. `oc_ex_apps_routes`
+remains empty until the ExApp registers its routes via a separate
+runtime call — which it can only do once it's reachable, i.e.
+listening on the right port. Chicken and egg.
+
+### Implication for the handshake design
+
+The flow has to be:
+
+```
+1. ExApp container starts (without knowing its assigned port).
+2. occ app_api:app:register …  →  AppAPI allocates port (e.g. 23000)
+                                  AppAPI also generates APP_SECRET
+                                  AppAPI heartbeats ExApp:23000  ⤺ fails
+3. The driver (bootstrap script or docker-install daemon) reads
+   the allocated port + secret from AppAPI and (re)starts the
+   ExApp container with APP_PORT and APP_SECRET set accordingly.
+4. ExApp comes back up listening on the allocated port; subsequent
+   heartbeats succeed; AppAPI marks the ExApp healthy.
+5. ExApp now POSTs its routes to AppAPI (separate runtime call).
+6. AppAPI proxy URLs start working.
+```
+
+For a `docker-install` daemon (HaRP, DSP), AppAPI itself spawns
+the container with the right env vars in step 3 — there's no chicken-
+and-egg.
+
+For `manual-install`, the operator runs the container, so steps
+3–5 require either:
+
+- **a) Two-pass deploy:** register first to get the port, then
+  start the container with `APP_PORT=<that>`. Awkward in a
+  docker-compose-up world where the container is already running.
+- **b) Reverse-proxy shim:** the host container listens on a fixed
+  port (8080) and a tiny in-container reverse proxy forwards from
+  the AppAPI-allocated port to 8080. Adds complexity but keeps
+  compose simple.
+- **c) Move to docker-install with HaRP:** the v1-canonical path.
+  Requires bringing up HaRP daemon + docker socket, but eliminates
+  the port-juggling entirely.
+
+### Decision (deferred to wire-dosbox-engine implementation)
+
+This is a genuine wire-dosbox-engine architectural choice that
+should not be resolved at proposal-time. Three options are on the
+table and each has real costs:
+
+- **(a)** is operationally honest but breaks the
+  one-`docker-compose-up` invariant we wanted for level-3.
+- **(b)** keeps level-3 simple but adds a moving part inside the
+  host image (a port-shim) just to work around an AppAPI default.
+- **(c)** is what the App Store will actually use, but the level-3
+  verifier becomes much heavier (HaRP + docker socket + FRP).
+
+Recommendation going into the implementation session: **(c) for
+production, (a) or (b) for level-3** — i.e., the App Store
+distribution uses HaRP/docker-install, and the level-3 verifier
+captures whichever manual-install path is least friction. Pick one
+on day-one of wire-dosbox-engine implementation.
+
+This finding retires part of the proposal's "the host shim
+advertises its listen port" framing — it's not advertising a
+chosen port, it's accepting an assigned one. The acceptance
+criterion stays the same in spirit ("no DB UPDATE workaround in
+the bootstrap"), but the mechanism shifts.
+
 ## AppAPI registration handshake (AppAPI 5.x)
 
 Triggered at host startup (FastAPI `lifespan` hook). One handshake

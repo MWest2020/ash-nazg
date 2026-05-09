@@ -37,6 +37,12 @@
 
 ## 4. AppAPI registration (AppAPI 5.x)
 
+- [ ] 4.0 **Day-one architectural decision**: choose between (a)
+        two-pass manual-install deploy, (b) in-container port-shim,
+        or (c) docker-install via HaRP. See `design.md` §
+        *AppAPI 5.x manual-install — finding from the test-target
+        migration*. Document the choice + rationale in design.md
+        before writing any handshake code.
 - [ ] 4.1 `appapi.register()` becomes real (replaces
         `NotImplementedError`). Builds and POSTs the canonical
         payload to `{NEXTCLOUD_URL}/index.php/apps/app_api/api/v1/exapp/register`

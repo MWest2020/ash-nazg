@@ -57,6 +57,91 @@ the Ash Nazg ExApp.
   three scaffold endpoints. Slightly more than the spec asked for
   ("a single passing test"), kept boring and assertive.
 
+### Discovered — 2026-05-09 — AppAPI 5.x manual-install assigns ports, doesn't accept them
+
+Migrated the level-3 verifier's test target to
+`nextcloud:32-apache` (AppAPI 5.x bundled, version 32.0.0) per
+`wire-dosbox-engine` task §4c. Re-ran
+`scripts/verify-against-nextcloud.sh` to validate the new target
+before building any handshake code on top.
+
+**Result: the original `wire-dosbox-engine` proposal premise was
+wrong.** Documented in
+`openspec/changes/wire-dosbox-engine/design.md` § *AppAPI 5.x
+manual-install — finding from the test-target migration*.
+
+#### What we believed
+
+> AppAPI 5.x ships a real registration handshake where the ExApp
+> advertises its listen port (and routes, scopes, etc.) back to
+> AppAPI.
+
+#### What 5.x actually does in `manual-install` mode
+
+- AppAPI **always auto-allocates** the ExApp port (~23000 in our
+  test). No `--info-xml`, `<port>`, `--env APP_PORT=`, or
+  `host: null` daemon makes it use a different port.
+- After `app_api:app:register` returns, AppAPI synchronously
+  heartbeats the ExApp at the allocated port.
+- Heartbeat fails (host shim listens on 8080) → ExApp ends up
+  registered but disabled, with `status.error: "Heartbeat check
+  failed"`. `oc_ex_apps_routes` empty.
+- Verified with two daemon variants (`host: ash-nazg-host` and
+  the AppAPI-canonical `host: null`): same outcome.
+
+#### Implication
+
+The handshake design has to flip:
+
+```
+1. ExApp container starts (without knowing its assigned port).
+2. occ app_api:app:register …  →  AppAPI allocates port (e.g. 23000)
+                                   AppAPI heartbeats ExApp:23000  ⤺ fails
+3. Driver reads allocated port + secret from AppAPI; (re)starts
+   the ExApp container with APP_PORT and APP_SECRET set.
+4. ExApp comes back up listening on the allocated port.
+5. ExApp POSTs its routes to AppAPI (separate runtime call).
+6. AppAPI proxy URLs start working.
+```
+
+In docker-install mode (HaRP, DSP), AppAPI itself spawns the
+container in step 3 with the right env vars — no chicken-and-egg.
+Manual-install requires either a two-pass deploy, an in-container
+port-shim, or migrating to docker-install.
+
+#### Three-way decision parked at task §4.0
+
+`wire-dosbox-engine`'s `tasks.md` now starts with §4.0 *Day-one
+architectural decision*:
+
+- **(a)** Two-pass manual-install deploy — operationally honest;
+  breaks the one-`docker-compose-up` level-3 invariant.
+- **(b)** In-container port-shim — simple level-3, adds a moving
+  part inside the host image just to work around an AppAPI default.
+- **(c)** docker-install via HaRP — what the App Store will use;
+  level-3 verifier becomes heavier (HaRP daemon + docker socket
+  + FRP).
+
+Recommended going in: **(c) for production, (a) or (b) for
+level-3** — App Store distribution uses HaRP/docker-install; the
+level-3 verifier captures whichever manual-install path is least
+friction. Decision lands on day-one of the wire-dosbox-engine
+implementation session, not in this proposal.
+
+#### Adjustments
+
+- `proposal.md` acceptance criterion #1: rephrased "host shim
+  advertises its listen port" to "host shim accepts AppAPI's
+  allocated port", with a pointer to the new design.md section.
+- `tasks.md` adds §4.0 above the existing §4 handshake tasks.
+- `scripts/local-nextcloud-stack.yml` keeps `nextcloud:32-apache`
+  (the migration itself is correct; only the assumption about the
+  handshake was wrong).
+
+This is exactly the kind of mid-implementation correction that
+spec-driven development is supposed to surface — better at design
+time than after the wiring code is written.
+
 ### Changed — 2026-05-09 — `wire-dosbox-engine` proposal: 3 acceptance additions
 
 Three explicit additions to the `wire-dosbox-engine` change so its

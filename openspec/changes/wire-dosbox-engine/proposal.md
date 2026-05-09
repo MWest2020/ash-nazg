@@ -54,8 +54,11 @@ The change is "done" when **all** of these hold against the level-3
 verifier (`scripts/verify-against-nextcloud.sh`) running the migrated
 test target (NC 32 + AppAPI 5.x; see below):
 
-- The host shim advertises its listen port to AppAPI via the
-  official AppAPI 5.x registration handshake, AND
+- The host shim accepts AppAPI's allocated port via the AppAPI
+  5.x registration flow (see *Open architectural decision* in
+  `design.md` — the port is assigned, not chosen, in 5.x manual-
+  install; this was discovered during the test-target migration),
+  AND
 - `oc_ex_apps.port` for `ash_nazg` matches what the host actually
   listens on **without** any direct DB UPDATE in the bootstrap.
   The `init-mvp-runtime` scaffold's

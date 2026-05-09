@@ -58,7 +58,10 @@ services:
       retries: 12
 
   nextcloud:
-    image: docker.io/library/nextcloud:30-apache
+    # NC 32 + the AppAPI 5.x line — chosen for the wire-dosbox-engine
+    # change. NC 30 was the historical first-verified target for the
+    # init-mvp-runtime scaffold (see CHANGELOG entry of 2026-05-09).
+    image: docker.io/library/nextcloud:32-apache
     ports:
       - "8088:80"
     environment:
