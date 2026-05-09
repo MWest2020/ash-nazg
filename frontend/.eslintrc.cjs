@@ -15,7 +15,13 @@
  */
 module.exports = {
 	root: true,
-	extends: ['@nextcloud'],
+	// `@nextcloud/eslint-config/vue3` is the Vue 3 + TypeScript preset.
+	// The bare `@nextcloud` preset is Vue 2 + JS only and does NOT
+	// configure @typescript-eslint/parser for <script setup> blocks,
+	// so .vue files with `lang="ts"` raise "Parsing error: Unexpected
+	// token" on TS-only syntax (generic defineProps, typed function
+	// signatures, etc.). See node_modules/@nextcloud/eslint-config/vue3.js.
+	extends: ['@nextcloud/eslint-config/vue3'],
 	rules: {
 		// §12.2 — block raw fetch().
 		'no-restricted-globals': [

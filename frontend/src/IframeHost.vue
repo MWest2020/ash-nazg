@@ -4,31 +4,26 @@
  *
  * SCAFFOLD: renders a labelled placeholder block. The real component
  * (websocket plumbing, KasmVNC client, error overlay) lands in the
- * `streaming-proxy` change.
- *
- * The @nextcloud/dialogs import is intentional per task §12.5 — this
- * component is the surface where session errors will be displayed
- * once the streaming layer is wired.
+ * `streaming-proxy` change. That change adds the @nextcloud/dialogs
+ * `showError` import for in-iframe error display — intentionally not
+ * pre-imported here (re-exporting from <script setup> is not allowed
+ * by Vue 3, and an unused import would itself trip the linter).
  */
 
-import { showError } from '@nextcloud/dialogs'
+import { translate as t } from '@nextcloud/l10n'
 
 defineProps<{
 	sessionId: string
 	streamUrl: string
 }>()
-
-// Re-export so future error handlers don't have to add the import
-// when wiring lands. Keeps the diff in `streaming-proxy` minimal.
-export { showError }
 </script>
 
 <template>
 	<div class="ash-nazg-iframe-host" data-testid="iframe-host-placeholder">
 		<dl class="ash-nazg-iframe-host__meta">
-			<dt>session</dt>
+			<dt>{{ t('ash_nazg', 'session') }}</dt>
 			<dd>{{ sessionId }}</dd>
-			<dt>stream</dt>
+			<dt>{{ t('ash_nazg', 'stream') }}</dt>
 			<dd>{{ streamUrl }}</dd>
 		</dl>
 	</div>

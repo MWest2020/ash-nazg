@@ -11,7 +11,9 @@
         "Save": "Opslaan",
         "Test installation": "Installatie testen",
         "saved (not yet persisted)": "opgeslagen (nog niet bewaard)",
-        "self-test not yet wired": "zelftest is nog niet aangesloten"
+        "self-test not yet wired": "zelftest is nog niet aangesloten",
+        "session": "sessie",
+        "stream": "stream"
     },
     "pluralForm": "nplurals=2; plural=(n != 1);"
 }

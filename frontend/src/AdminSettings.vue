@@ -28,11 +28,13 @@ const dosboxEnabled = ref<boolean>(false)
 const memoryLimitMb = ref<number>(1024)
 const idleTimeoutSeconds = ref<number>(900)
 
+/** Persist the current settings — stub until storage wiring lands. */
 function save(): void {
 	// SCAFFOLD: persistence lands in a later change.
 	showInfo(t(APP_ID, 'saved (not yet persisted)'))
 }
 
+/** POST to /selftest and surface the four-check status — stub until wired. */
 function runSelfTest(): void {
 	// SCAFFOLD: real wiring hits /selftest on the host.
 	showInfo(t(APP_ID, 'self-test not yet wired'))
@@ -40,27 +42,21 @@ function runSelfTest(): void {
 </script>
 
 <template>
-	<NcSettingsSection
-		:name="t('ash_nazg', 'Ash Nazg')"
-		:description="t('ash_nazg', 'Universal application runtime for Nextcloud Files.')"
-	>
+	<NcSettingsSection :name="t('ash_nazg', 'Ash Nazg')"
+		:description="t('ash_nazg', 'Universal application runtime for Nextcloud Files.')">
 		<NcCheckboxRadioSwitch v-model:checked="dosboxEnabled">
 			{{ t('ash_nazg', 'Enable DOSBox-X engine') }}
 		</NcCheckboxRadioSwitch>
 
-		<NcTextField
-			:value="memoryLimitMb.toString()"
+		<NcTextField :value="memoryLimitMb.toString()"
 			:label="t('ash_nazg', 'Memory limit (MB)')"
 			type="number"
-			@update:value="(v: string) => (memoryLimitMb = Number(v))"
-		/>
+			@update:value="(v: string) => (memoryLimitMb = Number(v))" />
 
-		<NcTextField
-			:value="idleTimeoutSeconds.toString()"
+		<NcTextField :value="idleTimeoutSeconds.toString()"
 			:label="t('ash_nazg', 'Idle timeout (seconds)')"
 			type="number"
-			@update:value="(v: string) => (idleTimeoutSeconds = Number(v))"
-		/>
+			@update:value="(v: string) => (idleTimeoutSeconds = Number(v))" />
 
 		<div class="ash-nazg-actions">
 			<NcButton variant="primary" @click="save">

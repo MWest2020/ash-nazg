@@ -17,12 +17,10 @@
 
 import {
 	registerFileAction,
+	type ActionContext,
+	type ActionContextSingle,
 	type IFileAction,
-} from '@nextcloud/files'
-import type {
-	ActionContext,
-	ActionContextSingle,
-	INode,
+	type INode,
 } from '@nextcloud/files'
 import { getCurrentUser } from '@nextcloud/auth'
 import { showInfo } from '@nextcloud/dialogs'
@@ -37,6 +35,7 @@ const RUNNABLE_EXTENSIONS = ['exe', 'com', 'bat'] as const
 /** Hard ceiling on the binary size offered for execution in v1. */
 const MAX_BINARY_SIZE_BYTES = 100 * 1024 * 1024
 
+/** Whether the current user has admin rights — gates the Run action. */
 function isCurrentUserAdmin(): boolean {
 	// SCAFFOLD: a real implementation queries Nextcloud capabilities.
 	// `getCurrentUser()` exposes the user object; admin detection is
@@ -49,6 +48,11 @@ function isCurrentUserAdmin(): boolean {
 	return Boolean((user as unknown as { isAdmin?: boolean }).isAdmin)
 }
 
+/**
+ * True if the file's name ends with one of `RUNNABLE_EXTENSIONS`.
+ *
+ * @param node - The Files-app entry the right-click menu was opened on.
+ */
 function hasRunnableExtension(node: INode): boolean {
 	const name = node.basename.toLowerCase()
 	return RUNNABLE_EXTENSIONS.some((ext) => name.endsWith(`.${ext}`))

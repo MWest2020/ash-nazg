@@ -11,7 +11,9 @@
         "Save": "Save",
         "Test installation": "Test installation",
         "saved (not yet persisted)": "saved (not yet persisted)",
-        "self-test not yet wired": "self-test not yet wired"
+        "self-test not yet wired": "self-test not yet wired",
+        "session": "session",
+        "stream": "stream"
     },
     "pluralForm": "nplurals=2; plural=(n != 1);"
 }

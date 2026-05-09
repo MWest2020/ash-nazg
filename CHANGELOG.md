@@ -57,6 +57,64 @@ the Ash Nazg ExApp.
   three scaffold endpoints. Slightly more than the spec asked for
   ("a single passing test"), kept boring and assertive.
 
+### Fixed — 2026-05-09 — Lint and ruff failures in `test` workflow
+
+`build-host` and `build-engine-dosbox` went green after the earlier
+fix; `test` then failed on real lint findings rather than a YAML
+parse. Reproduced locally and resolved.
+
+#### Frontend
+
+- **eslint preset wrong for Vue 3 + TypeScript.** The bare
+  `'@nextcloud'` extends maps to the Vue 2 + JS preset, which
+  doesn't configure `@typescript-eslint/parser` for `<script
+  setup>` blocks. `.vue` files with `lang="ts"` raised `Parsing
+  error: Unexpected token` on TS-only syntax (generic
+  `defineProps`, typed arrow signatures). Switched to
+  `'@nextcloud/eslint-config/vue3'` — that preset wires up
+  `parser: '@typescript-eslint/parser'` for SFC scripts and adds
+  `@vue/eslint-config-typescript/recommended`. Documented the
+  reason inline so the bare-`@nextcloud` mistake doesn't recur.
+- `frontend/src/files-action.ts` — merged the two
+  `from '@nextcloud/files'` imports (`import/no-duplicates`).
+  All names are now imported in one statement with `type`
+  qualifiers per import.
+- `frontend/src/IframeHost.vue` — removed the `export { showError }`
+  line. Vue 3's `<script setup>` does not allow ES module exports;
+  the rationale ("keeps the diff in streaming-proxy minimal") was
+  weak. The streaming change can add the import when it needs it.
+- `frontend/src/IframeHost.vue` placeholder labels — wrapped the
+  bare `<dt>session</dt>` and `<dt>stream</dt>` in `t('ash_nazg', …)`
+  per the project's own `vue/no-bare-strings-in-template` rule.
+  Added matching `session`/`stream` entries to `l10n/en.json` and
+  `l10n/nl.json` (Dutch: `sessie`, `stream`).
+- Auto-fixable formatting (`vue/first-attribute-linebreak`,
+  `vue/html-closing-bracket-newline`) — resolved with
+  `npm run lint:fix`. Empty JSDoc stubs the auto-fixer added
+  were filled in with one-line descriptions for the four
+  scaffold helper functions.
+
+After this batch: `npm run lint` returns clean (0 errors, 0
+warnings) and `npm run build` produces the bundle to
+`host/static/`.
+
+#### Host
+
+- `host/src/ash_nazg/appapi.py` — three ruff findings:
+    - **UP037** on `-> "AppApiConfig"`. With
+      `from __future__ import annotations` already in the file,
+      string-quoting the return type is dead code. Dropped the
+      quotes.
+    - **S104** on `default="0.0.0.0"` and the matching
+      `os.environ.get("APP_HOST", "0.0.0.0")`. Bandit flags binding
+      to all interfaces as a security smell, but that's exactly
+      what the container does — AppAPI's reverse proxy is the
+      external boundary, not the host shim's port. Annotated both
+      with `# noqa: S104` and a one-line comment.
+
+`uv run ruff check src tests` now returns "All checks passed".
+`uv run pytest -q` reports 5 passed.
+
 ### Fixed — 2026-05-09 — CI workflow failures (test.yml, build-host, build-engine-dosbox)
 
 All three failing workflows debugged and fixed locally before re-push.
