@@ -25,7 +25,7 @@ jobs:
       - name: install uv
         run: pip install --no-cache-dir 'uv==0.5.6'
 
-      - name: install deps (extras: dev)
+      - name: "install deps (extras: dev)"
         run: uv sync --extra dev
 
       - name: ruff check

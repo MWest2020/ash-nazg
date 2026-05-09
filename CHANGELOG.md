@@ -57,7 +57,51 @@ the Ash Nazg ExApp.
   three scaffold endpoints. Slightly more than the spec asked for
   ("a single passing test"), kept boring and assertive.
 
-### Fixed — 2026-05-09 — Stage-1 smoke test discoveries
+### Fixed — 2026-05-09 — CI workflow failures (test.yml, build-host, build-engine-dosbox)
+
+All three failing workflows debugged and fixed locally before re-push.
+
+- **`test.yml` (0 s instant fail).** GitHub Actions reported a
+  workflow-file issue. `python3 -c "yaml.safe_load(...)"` showed a
+  scanner error at line 28: `name: install deps (extras: dev)` —
+  the unquoted colon inside the `name:` value tripped the YAML
+  parser. Quoted the entire value. Same root cause as the earlier
+  `openspec/config.yaml:96` fix.
+- **`build-host.yml` (`COPY static/ /app/static/` not found).**
+  CI checks out a clean clone where `host/static/` does not exist
+  (it's a frontend build artefact). Refactored `host/Dockerfile`
+  into a **3-stage build** that produces the frontend bundle as
+  its first stage:
+    1. `frontend-build` — `node:22-bookworm-slim`, runs
+       `npm ci --ignore-scripts && npm audit signatures &&
+       npm run build`. Vite emits to `/work/host/static/`.
+    2. `python-build` — `python:3.12-slim-bookworm` + uv sync.
+    3. `runtime` — slim Python image, COPYs the bundle from
+       `frontend-build`, the venv from `python-build`, plus
+       `l10n/` and `appinfo/info.xml`.
+  Build context is now repo root (`docker build -f host/Dockerfile .`)
+  so the Dockerfile can see both `frontend/` and `host/`.
+  `build-host.yml` updated to `context: .`.
+  New repo-root `.dockerignore` excludes `.git/`, `node_modules/`,
+  `host/static/` (rebuilt inside Docker), specs/docs/scripts dirs,
+  and secrets globs. Locally smoke-tested — host image builds
+  clean (166 MB) and serves every endpoint with the bundle baked
+  in.
+- **`build-engine-dosbox.yml` (`Unable to locate package
+  dosbox-x`).** Confirmed by trying to build locally: Debian
+  Bookworm only ships plain `dosbox`, not `dosbox-x`. The latter
+  is in **Ubuntu universe**. Switched the engine base from
+  `debian:12-slim` to `ubuntu:24.04` — `dosbox-x` 2024.03.01 is
+  available without source builds and KasmVNC v1.4.0 ships
+  matching `noble` `.deb` assets, so the OS / streaming layer
+  stay coherent. Also `userdel -r ubuntu || true` before creating
+  the `app:1000` user, since Ubuntu 24.04's default `ubuntu`
+  account already occupies uid/gid 1000. Locally smoke-tested —
+  image builds (477 MB), `dosbox-x --version` returns 2024.03.01,
+  `kasmvncserver` and `tini` resolve, stub entrypoint prints the
+  spec'd "wiring TBD" message and exits 0.
+
+
 
 Built the host container locally with podman, ran it, and probed
 every endpoint. The smoke caught eight real issues that the

@@ -1,0 +1,58 @@
+# Build-context exclusions for `docker build -f host/Dockerfile .`.
+#
+# The Dockerfile only COPYs from frontend/ and host/, so this list
+# focuses on cutting heavyweight or sensitive paths out of the
+# context that gets sent to the daemon.
+
+# --- VCS, CI, IDE ---
+.git/
+.github/
+.idea/
+.vscode/
+
+# --- Build outputs and caches ---
+**/node_modules/
+**/__pycache__/
+**/.pytest_cache/
+**/.ruff_cache/
+**/.mypy_cache/
+**/.venv/
+**/dist/
+**/build/
+**/.vite/
+**/.cache/
+*.pyc
+*.pyo
+*.tsbuildinfo
+
+# Frontend bundle output. Re-built inside the frontend stage of the
+# Dockerfile; including a stale local copy would just bloat context.
+host/static/
+
+# --- Sensitive / personal ---
+.env
+.env.*
+*.pem
+*.key
+*_rsa
+*.crt
+
+# --- Repository content not needed at runtime ---
+openspec/
+docs/
+engines/
+scripts/
+.claude/
+
+# NOTE: `appinfo/info.xml` and `l10n/` ARE needed in the runtime
+# image — the host's translations-folder declared in info.xml points
+# at /app/l10n, and AppAPI may re-read info.xml at registration. The
+# Dockerfile COPYs them explicitly.
+appinfo/screenshots/
+appinfo/screenshots/README.md
+
+# --- OS / editor noise ---
+.DS_Store
+*.swp
+*.swo
+*~

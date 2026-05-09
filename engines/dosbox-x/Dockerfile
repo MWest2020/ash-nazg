@@ -7,9 +7,17 @@
 # change `wire-dosbox-engine`, which replaces the entrypoint with the
 # WebDAV mount + KasmVNC + dosbox-x launch sequence.
 #
+# Base: ubuntu:24.04 (Noble). Rationale:
+#   - `dosbox-x` is packaged in Ubuntu's `universe` repo (NOT in
+#     Debian — only the older `dosbox` is in Debian repos). Building
+#     dosbox-x from source would add ~200 MB of build-deps and a few
+#     minutes per build; the Ubuntu package is the boring choice.
+#   - KasmVNC ships matching `noble` .deb assets in v1.4.0+, so the
+#     base-OS / KasmVNC pinning stay coherent.
+#
 # Multi-arch: amd64 + arm64 via docker buildx (CI).
 
-FROM debian:12-slim AS runtime
+FROM ubuntu:24.04 AS runtime
 
 ARG TARGETARCH
 # KASMVNC_VERSION must match an upstream GitHub release tag of
@@ -17,13 +25,15 @@ ARG TARGETARCH
 # sensitive to release naming changes — verify the asset names exist
 # at /releases/download/v${KASMVNC_VERSION}/ before bumping.
 #
-# Verified 2026-05-08: v1.4.0 is the latest release and ships both
-# kasmvncserver_bookworm_1.4.0_amd64.deb and ..._arm64.deb.
+# Verified 2026-05-09: v1.4.0 ships kasmvncserver_noble_1.4.0_{amd64,arm64}.deb.
 ARG KASMVNC_VERSION=1.4.0
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-# --- Debian-packaged components ---------------------------------------------
+# --- Ubuntu-packaged components ---------------------------------------------
+# Ubuntu 24.04 has main + universe enabled by default in the standard
+# image, so no source-list editing is needed. `dosbox-x` lives in
+# `universe/otherosfs`.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         ca-certificates \
@@ -38,7 +48,7 @@ RUN apt-get update \
 # releases.
 #
 # SCAFFOLD CAVEAT: the URL pattern is verified against KasmVNC 1.4.0
-# (assets confirmed 2026-05-08). A future release may change the
+# (assets confirmed 2026-05-09). A future release may change the
 # asset filename. The wire-dosbox-engine change owns hardening this
 # (sha256 pinning, signature verification, mirroring to a controlled
 # artifact store).
@@ -48,7 +58,7 @@ RUN set -eux; \
         arm64) deb_arch=arm64 ;; \
         *) echo "Unsupported TARGETARCH: ${TARGETARCH}" >&2; exit 1 ;; \
     esac; \
-    url="https://github.com/kasmtech/KasmVNC/releases/download/v${KASMVNC_VERSION}/kasmvncserver_bookworm_${KASMVNC_VERSION}_${deb_arch}.deb"; \
+    url="https://github.com/kasmtech/KasmVNC/releases/download/v${KASMVNC_VERSION}/kasmvncserver_noble_${KASMVNC_VERSION}_${deb_arch}.deb"; \
     curl -fsSL "${url}" -o /tmp/kasmvnc.deb; \
     apt-get update; \
     apt-get install -y --no-install-recommends /tmp/kasmvnc.deb; \
@@ -56,8 +66,12 @@ RUN set -eux; \
     rm -rf /var/lib/apt/lists/*
 
 # --- Non-root user ---------------------------------------------------------
-# davfs2 needs supplementary group membership to mount as a regular user.
-RUN groupadd --system --gid 1000 app \
+# Ubuntu 24.04 ships a default `ubuntu` user at uid/gid 1000; remove
+# it so we can keep the engine container's user-id aligned with the
+# host container's `app:1000` for review-friendliness. davfs2 needs
+# supplementary group membership to mount as a regular user.
+RUN userdel -r ubuntu 2>/dev/null || true \
+    && groupadd --system --gid 1000 app \
     && useradd --system --uid 1000 --gid app --create-home --shell /bin/bash app \
     && usermod -aG davfs2 app
 

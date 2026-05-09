@@ -2,36 +2,61 @@
 #
 # Ash Nazg host shim — multi-stage build.
 #
-# Stage 1 builds a project venv with `uv`, the project's chosen package
-# manager. Stage 2 copies the venv into a slim runtime image that runs
-# uvicorn as a non-root user.
+# Build context is the repo root (so the frontend build stage can see
+# `frontend/` alongside `host/`). Invoke with:
+#
+#   docker build -t ash-nazg-host -f host/Dockerfile .
+#
+# Three stages:
+#   1. frontend-build — Node 22, runs `npm ci --ignore-scripts &&
+#      npm run build`. Vite writes the bundle to `host/static/` per
+#      `frontend/vite.config.ts`.
+#   2. python-build   — Python 3.12, runs `uv sync --frozen --no-dev`.
+#   3. runtime        — slim Python image, non-root user, uvicorn.
+#
+# Each stage starts fresh; layer caching keeps repeat builds quick
+# when only one tier changes.
 
-# --- Stage 1: build venv with uv ---------------------------------------------
-FROM python:3.12-slim-bookworm AS builder
+# --- Stage 1: frontend bundle ----------------------------------------------
+FROM node:22-bookworm-slim AS frontend-build
 
-# `pip install uv` is the documented bootstrap path for uv. Pin the
-# version so the build is reproducible across rebuilds.
+WORKDIR /work/frontend
+
+# Lockfile + manifest first so the npm install layer caches across
+# source-only changes.
+COPY frontend/package.json frontend/package-lock.json ./
+
+# `--ignore-scripts` is project policy (supply-chain safety: postinstall
+# scripts are the dominant attack vector). Re-enable only for specific
+# packages with documented need.
+RUN npm ci --ignore-scripts \
+    && npm audit signatures
+
+# Now the source tree.
+COPY frontend/ ./
+
+# Vite's outDir is `../host/static` → ends up at /work/host/static.
+RUN npm run build
+
+
+# --- Stage 2: python venv with uv ------------------------------------------
+FROM python:3.12-slim-bookworm AS python-build
+
+# `pip install uv` is the documented uv bootstrap path. Pinned for
+# reproducibility.
 ENV UV_VERSION=0.5.6
 RUN pip install --no-cache-dir "uv==${UV_VERSION}"
 
 WORKDIR /app
 
-# Copy the dependency manifest first so the layer caches across source-only
-# changes. uv.lock may not exist on the very first build (this is a
-# scaffold); when it does, we use --frozen to enforce reproducibility.
-COPY pyproject.toml ./
-COPY uv.lock* ./
-COPY src/ ./src/
+COPY host/pyproject.toml ./
+COPY host/uv.lock ./
+COPY host/src/ ./src/
 
-RUN if [ -f uv.lock ]; then \
-        uv sync --frozen --no-dev; \
-    else \
-        echo ">>> WARNING: no uv.lock present — falling back to non-frozen sync." >&2 ; \
-        echo ">>> Generate one with 'uv lock' before shipping a real build." >&2 ; \
-        uv sync --no-dev; \
-    fi
+RUN uv sync --frozen --no-dev
 
-# --- Stage 2: runtime --------------------------------------------------------
+
+# --- Stage 3: runtime ------------------------------------------------------
 FROM python:3.12-slim-bookworm AS runtime
 
 # Non-root user. UID/GID are fixed so volume mounts stay predictable.
@@ -40,13 +65,14 @@ RUN groupadd --system --gid 1000 app \
 
 WORKDIR /app
 
-COPY --from=builder /app/.venv /app/.venv
-COPY --from=builder /app/src   /app/src
+COPY --from=python-build  /app/.venv               /app/.venv
+COPY --from=python-build  /app/src                 /app/src
+COPY --from=frontend-build /work/host/static       /app/static
 
-# Frontend bundle. Built outside the image with `npm run build` (vite
-# emits to host/static/) before `docker build`. Optional — if absent,
-# admin_settings.py renders a "not built yet" warning.
-COPY static/ /app/static/
+# Translation files (info.xml's <translations-folder>/app/l10n).
+COPY l10n/             /app/l10n/
+# App metadata (info.xml — AppAPI may re-read it at registration).
+COPY appinfo/info.xml  /app/appinfo/info.xml
 
 ENV PATH="/app/.venv/bin:${PATH}" \
     PYTHONDONTWRITEBYTECODE=1 \
