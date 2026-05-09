@@ -1,0 +1,25 @@
+# Keep the build context lean and exclude test/cache files from the image.
+.venv/
+venv/
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Tests don't ship in the runtime image; CI runs them in a separate stage.
+tests/
+
+# Scratch/editor noise.
+.git/
+.github/
+.idea/
+.vscode/
+*.swp
+.DS_Store
+
+# Static frontend bundle is mounted at runtime, not baked in.
+static/

@@ -1,0 +1,27 @@
+name: nextcloud-integration
+
+# Level-3 verifier — runs ONLY on tag pushes and manual dispatch.
+# Never on PR (too slow; would burn the maintainer's quota).
+#
+# Currently calls a placeholder script that exits 0 with a TODO log.
+# When the real ephemeral-Nextcloud flow lands, this workflow becomes
+# the App Store submission gate.
+
+on:
+  push:
+    tags: ['v*.*.*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  level-3:
+    name: ephemeral Nextcloud install (placeholder)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: run level-3 verifier
+        run: ./scripts/verify-against-nextcloud.sh

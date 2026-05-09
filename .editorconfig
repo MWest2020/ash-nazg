@@ -1,0 +1,37 @@
+# EditorConfig — https://editorconfig.org/
+# Aligned with Nextcloud frontend conventions and the host (Python) style.
+
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = space
+
+# --- Frontend ---
+[*.{js,jsx,ts,tsx,vue,json,jsonc,html,css,scss,yml,yaml,md}]
+indent_size = 2
+
+# --- Python (host) ---
+[*.py]
+indent_size = 4
+max_line_length = 100
+
+# --- Shell (engine entrypoints) ---
+[*.sh]
+indent_size = 2
+
+# --- Dockerfiles ---
+[{Dockerfile,Dockerfile.*,*.Dockerfile}]
+indent_size = 2
+
+# --- Makefiles need real tabs ---
+[{Makefile,*.mk}]
+indent_style = tab
+
+# --- Don't reformat upstream license ---
+[LICENSE]
+trim_trailing_whitespace = false
+insert_final_newline = false

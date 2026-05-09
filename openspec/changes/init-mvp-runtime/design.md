@@ -180,7 +180,7 @@ On timeout, host sends SIGTERM, waits 30s, then SIGKILL.
 
 **Audit log entry per execution** (written to Nextcloud's audit log):
 ```
-event: ash-nazg.execution
+event: ash_nazg.execution
 user_id: admin
 file_path: /Documents/keen1.exe
 file_sha256: ...

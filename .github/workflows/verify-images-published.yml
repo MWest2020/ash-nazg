@@ -1,0 +1,93 @@
+name: verify-images-published
+
+# §11.6 — gate that verifies both Ash Nazg images exist in GHCR for the
+# tag being released BEFORE any App Store submission workflow runs.
+#
+# Triggers on tag push (`v*.*.*`) and on workflow_dispatch with an
+# explicit `tag` input. Any future App Store submission workflow MUST
+# declare `needs: [verify-images-published]` so it cannot run before
+# this gate is green.
+#
+# The check uses `docker manifest inspect`, which queries the registry
+# without pulling the image. Authenticates with the workflow's
+# GITHUB_TOKEN (read-only on packages is enough).
+
+on:
+  push:
+    tags: ['v*.*.*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to verify (e.g. v0.1.0). Omit to use the current ref.'
+        required: false
+        type: string
+
+permissions:
+  contents: read
+  packages: read
+
+jobs:
+  verify:
+    name: GHCR image presence (host + dosbox-x)
+    runs-on: ubuntu-latest
+    steps:
+      - name: derive tag
+        id: tag
+        shell: bash
+        run: |
+          if [[ -n "${{ inputs.tag }}" ]]; then
+            tag="${{ inputs.tag }}"
+          elif [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            tag="${GITHUB_REF#refs/tags/}"
+          else
+            echo "::error ::no tag input and not running on a tag ref"
+            exit 1
+          fi
+          # GHCR uses the version without the leading 'v' for OCI tags
+          # produced by docker/metadata-action with `pattern={{version}}`.
+          version="${tag#v}"
+          echo "tag=${tag}" >> "${GITHUB_OUTPUT}"
+          echo "version=${version}" >> "${GITHUB_OUTPUT}"
+          echo "Verifying images for tag=${tag}, version=${version}"
+
+      - name: log in to GHCR (read-only)
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: verify host image
+        env:
+          REPO_OWNER: ${{ github.repository_owner }}
+          VERSION: ${{ steps.tag.outputs.version }}
+        shell: bash
+        run: |
+          ref="ghcr.io/${REPO_OWNER}/ash-nazg-host:${VERSION}"
+          echo "::group::docker manifest inspect ${ref}"
+          if ! docker manifest inspect "${ref}"; then
+            echo "::error ::host image not found at ${ref}"
+            echo "::error ::ensure build-host.yml ran successfully on this tag before submission"
+            exit 1
+          fi
+          echo "::endgroup::"
+
+      - name: verify dosbox-x engine image
+        env:
+          REPO_OWNER: ${{ github.repository_owner }}
+          VERSION: ${{ steps.tag.outputs.version }}
+        shell: bash
+        run: |
+          ref="ghcr.io/${REPO_OWNER}/ash-nazg-dosbox-x:${VERSION}"
+          echo "::group::docker manifest inspect ${ref}"
+          if ! docker manifest inspect "${ref}"; then
+            echo "::error ::dosbox-x image not found at ${ref}"
+            echo "::error ::ensure build-engine-dosbox.yml ran successfully on this tag before submission"
+            exit 1
+          fi
+          echo "::endgroup::"
+
+      - name: summary
+        run: |
+          echo "Both ash-nazg images present at version ${{ steps.tag.outputs.version }}."
+          echo "App Store submission workflow may proceed."

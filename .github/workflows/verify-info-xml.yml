@@ -1,0 +1,37 @@
+name: verify-info-xml
+
+on:
+  pull_request:
+    paths:
+      - 'appinfo/info.xml'
+      - 'scripts/verify-info-xml.sh'
+      - '.github/workflows/verify-info-xml.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'appinfo/info.xml'
+      - 'scripts/verify-info-xml.sh'
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: XSD + AppAPI rules
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: install xmllint
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libxml2-utils
+
+      - name: cache fetched XSD
+        uses: actions/cache@v4
+        with:
+          path: .cache/info.xsd
+          key: nextcloud-info-xsd-v1
+
+      - name: run verifier
+        run: ./scripts/verify-info-xml.sh

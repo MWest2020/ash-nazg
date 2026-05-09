@@ -78,7 +78,7 @@ the OCS API for every Run request, regardless of outcome.
 - **GIVEN** an admin runs `keen1.exe` and closes the session normally
 - **WHEN** the session ends
 - **THEN** an audit log entry SHALL exist containing:
-  - `event`: `ash-nazg.execution`
+  - `event`: `ash_nazg.execution`
   - `user_id`: the Nextcloud user id
   - `file_path`: the Files path
   - `file_sha256`: hex digest of the binary
@@ -100,9 +100,13 @@ the OCS API for every Run request, regardless of outcome.
 
 ### Requirement: No bundled non-open-source content
 
-The repository, the host container image, and the engine container
-image SHALL NOT include any binaries, ROMs, OS images, BIOS files, or
-fonts that are not under an OSI-approved open source license.
+The repository and all published container images SHALL contain only
+software under OSI-approved open source licenses. Proprietary
+binaries, ROMs, OS installation images, BIOS files, and proprietary
+fonts MUST NOT be included in any image, archive, or git-tracked
+artifact under any circumstances. Distribution of user-supplied
+proprietary content remains the user's responsibility, never the
+project's.
 
 #### Scenario: Win 3.11 image not shipped
 

@@ -49,7 +49,7 @@ This is the initial scaffolding of an empty repository. Concretely:
   placeholder Files action registration, and an iframe-host component.
 - **Nextcloud app metadata**: `appinfo/info.xml` with the `<external-app>`
   block declaring AppAPI dependency, container reference (placeholder image
-  URL), and required scopes (FILES, AI_PROVIDERS, AUDIT_LOGS).
+  URL), and required scopes (FILES, AUDIT_LOGS, NOTIFICATIONS).
 - **CI plumbing**: `.github/workflows/` with build-and-push for both
   containers (host + dosbox-x engine), multi-arch (amd64+arm64), pushing
   to GHCR on tag.

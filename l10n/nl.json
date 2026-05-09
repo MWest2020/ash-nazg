@@ -1,0 +1,17 @@
+{
+    "translations": {
+        "Ash Nazg": "Ash Nazg",
+        "Run legacy and sandboxed binaries from your Nextcloud Files.": "Voer legacy- en sandboxed-binaries uit vanuit je Nextcloud Files.",
+        "Universal application runtime for Nextcloud Files.": "Universele applicatie-runtime voor Nextcloud Files.",
+        "Run with Ash Nazg": "Uitvoeren met Ash Nazg",
+        "Ash Nazg dispatcher is not wired yet — coming in the next change.": "De Ash Nazg-dispatcher is nog niet aangesloten — volgt in de volgende wijziging.",
+        "Enable DOSBox-X engine": "DOSBox-X-engine inschakelen",
+        "Memory limit (MB)": "Geheugenlimiet (MB)",
+        "Idle timeout (seconds)": "Inactiviteitstime-out (seconden)",
+        "Save": "Opslaan",
+        "Test installation": "Installatie testen",
+        "saved (not yet persisted)": "opgeslagen (nog niet bewaard)",
+        "self-test not yet wired": "zelftest is nog niet aangesloten"
+    },
+    "pluralForm": "nplurals=2; plural=(n != 1);"
+}

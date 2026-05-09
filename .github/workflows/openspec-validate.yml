@@ -1,0 +1,43 @@
+name: openspec-validate
+
+on:
+  pull_request:
+    paths:
+      - 'openspec/**'
+      - '.github/workflows/openspec-validate.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'openspec/**'
+      - '.github/workflows/openspec-validate.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: install OpenSpec CLI
+        run: npm install -g '@fission-ai/openspec@latest'
+
+      - name: validate every in-flight change folder
+        shell: bash
+        run: |
+          shopt -s nullglob
+          had_failure=0
+          for d in openspec/changes/*/; do
+            name="$(basename "$d")"
+            echo "::group::validate ${name}"
+            if ! openspec validate "${name}"; then
+              had_failure=1
+            fi
+            echo "::endgroup::"
+          done
+          exit "${had_failure}"

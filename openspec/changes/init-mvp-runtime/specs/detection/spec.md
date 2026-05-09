@@ -45,9 +45,11 @@ incorrect or missing extensions.
 
 ### Requirement: Detection by extension as fallback hint
 
-When magic-byte detection is ambiguous (e.g., a generic ZIP file that
-could be a `.jar`, a Java executable, or a generic archive), the host
-SHALL use the file extension as a tiebreaker.
+The host SHALL use the file extension as a tiebreaker when magic-byte
+detection is ambiguous (e.g., a generic ZIP file that could be a `.jar`,
+a Java executable, or a generic archive). Extension-based hints SHALL
+only refine an already-matched magic-byte family; they SHALL NOT
+override magic-byte detection.
 
 #### Scenario: ZIP file with .jar extension
 

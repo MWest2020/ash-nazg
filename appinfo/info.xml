@@ -1,0 +1,128 @@
+<?xml version="1.0"?>
+<!--
+    Ash Nazg — Nextcloud ExApp manifest.
+
+    This file is the source of truth for App Store metadata and the
+    AppAPI <external-app> deployment block. Two schemas are at play:
+
+      * https://apps.nextcloud.com/schema/apps/info.xsd  (canonical NC schema)
+      * AppAPI 5.x ExApp extension (the <external-app> block below;
+        validated by AppAPI itself, not the canonical XSD).
+
+    The CI workflow `openspec-validate` does NOT validate XML; the
+    `info-xml-validate` workflow added in task §6.2 owns that gate.
+-->
+<info xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      xsi:noNamespaceSchemaLocation="https://apps.nextcloud.com/schema/apps/info.xsd">
+
+    <id>ash_nazg</id>
+
+    <name>Ash Nazg</name>
+    <name lang="nl">Ash Nazg</name>
+
+    <summary>Run legacy and sandboxed binaries from your Nextcloud Files.</summary>
+    <summary lang="nl">Voer legacy- en sandboxed-binaries uit vanuit je Nextcloud Files.</summary>
+
+    <description><![CDATA[
+Ash Nazg is a runtime host for Nextcloud. Users upload binaries to
+their Files, click Run, and the binary executes inside a sandboxed
+engine container. Output is streamed back to the browser; writes flow
+back into Files via WebDAV.
+
+The v1 release ships one engine — DOSBox-X — for DOS and Windows 3.x
+executables. The architecture is plugin-based: future engines (Wine,
+RetroArch, JVM, wasmtime) slot in as additional packages.
+
+**What ships here**
+
+- One engine (DOSBox-X), one streaming protocol (KasmVNC),
+  admin-only execution with hard resource limits.
+- Files-app integration: right-click a binary, click *Run with
+  Ash Nazg*.
+- Audit log entry per execution.
+
+**What does NOT ship**
+
+- No proprietary binaries, OS images, BIOS files, ROMs, or fonts.
+  Users supply their own legally-obtained software. See
+  https://github.com/MWest2020/ash-nazg/blob/main/docs/bring-your-own-content.md.
+
+**Status:** alpha — scaffolding. Not yet for production use.
+]]></description>
+    <description lang="nl"><![CDATA[
+Ash Nazg is een runtime-host voor Nextcloud. Gebruikers uploaden
+binaries naar hun Files, klikken op Run, en de binary wordt
+uitgevoerd in een sandboxed engine-container. Output wordt
+gestreamd naar de browser; schrijfacties stromen terug naar Files
+via WebDAV.
+
+De v1-release bevat één engine — DOSBox-X — voor DOS- en
+Windows 3.x-executables. De architectuur is plugin-gebaseerd:
+toekomstige engines (Wine, RetroArch, JVM, wasmtime) worden als
+losse packages toegevoegd.
+
+**Wat hier is opgenomen**
+
+- Eén engine (DOSBox-X), één streaming-protocol (KasmVNC),
+  uitvoering uitsluitend door admins, met harde resource-limieten.
+- Files-app-integratie: rechtsklik op een binary, klik op *Run
+  with Ash Nazg*.
+- Audit-log-regel per uitvoering.
+
+**Wat NIET wordt meegeleverd**
+
+- Geen proprietary binaries, OS-images, BIOS-bestanden, ROMs of
+  fonts. Gebruikers leveren hun eigen, legaal verkregen software.
+  Zie https://github.com/MWest2020/ash-nazg/blob/main/docs/bring-your-own-content.md.
+
+**Status:** alpha — scaffolding. Nog niet productie-rijp.
+]]></description>
+
+    <version>0.0.0</version>
+    <licence>agpl</licence>
+    <author>Ash Nazg contributors</author>
+
+    <namespace>AshNazg</namespace>
+    <category>tools</category>
+
+    <website>https://github.com/MWest2020/ash-nazg</website>
+    <bugs>https://github.com/MWest2020/ash-nazg/issues</bugs>
+    <repository type="git">https://github.com/MWest2020/ash-nazg.git</repository>
+
+    <screenshot>https://raw.githubusercontent.com/MWest2020/ash-nazg/main/appinfo/screenshots/01-files-action.png</screenshot>
+    <screenshot>https://raw.githubusercontent.com/MWest2020/ash-nazg/main/appinfo/screenshots/02-admin-settings.png</screenshot>
+    <screenshot>https://raw.githubusercontent.com/MWest2020/ash-nazg/main/appinfo/screenshots/03-iframe-host.png</screenshot>
+
+    <dependencies>
+        <nextcloud min-version="30" max-version="32"/>
+    </dependencies>
+
+    <!--
+        AppAPI 5.x ExApp deployment block. Validated by AppAPI at
+        registration time; not part of the canonical info.xsd.
+
+        - <image-tag> MUST be a concrete version, never `latest`. The
+          scaffold uses 0.0.0-scaffold; the release pipeline rewrites
+          this on every tagged build.
+        - <scopes> must match `host/src/ash_nazg/appapi.py::REQUIRED_SCOPES`.
+          The two are kept in lockstep manually for now; the
+          `wire-dosbox-engine` change adds a CI consistency check.
+    -->
+    <external-app>
+        <docker-install>
+            <registry>ghcr.io</registry>
+            <image>mwest2020/ash-nazg-host</image>
+            <image-tag>0.0.0-scaffold</image-tag>
+        </docker-install>
+        <scopes>
+            <value>FILES</value>
+            <value>AUDIT_LOGS</value>
+            <value>NOTIFICATIONS</value>
+        </scopes>
+        <protocol>http</protocol>
+        <port>8080</port>
+        <system>false</system>
+        <translations-folder>/app/l10n</translations-folder>
+    </external-app>
+
+</info>
