@@ -63,20 +63,100 @@ proprietary installation media. You upload your own from sources
 you have a right to use. See
 [`bring-your-own-content.md`](./bring-your-own-content.md).
 
-## Limitations in v1
+## What DOSBox-X v1 can and cannot run
 
-- One engine: DOSBox-X. ELF binaries (Linux), Mach-O (macOS),
-  WebAssembly, and Java archives are detected but rejected with
-  `415 Unsupported Media Type`. Future engines will handle these.
-- One streaming protocol: KasmVNC. No audio in v1.
-- No GPU acceleration in v1. 3D-heavy programs will be slow or
-  unrenderable.
-- No clipboard sync between the iframe and the surrounding
-  Nextcloud UI in v1.
+The v1 release ships exactly one engine: DOSBox-X. It is **not** a
+general "run any Windows binary" environment. Honest scope keeps
+expectations aligned.
 
-These are tracked in subsequent OpenSpec changes; none of them is
-a bug, all are intentionally out of scope for the scaffolding +
-demo flow.
+### What it **can** run
+
+- **MS-DOS / PC-DOS / FreeDOS programs.** All eras: DOS 3.x
+  through 7.x. Anything that ran on a 386, 486, or original
+  Pentium runs here.
+- **DOS games.** Commander Keen, Doom, Wolfenstein 3D, Lemmings,
+  Prince of Persia, Sim City Classic, Master of Orion, X-COM,
+  Theme Hospital, etc. Bring your own copies.
+- **Windows 3.x.** Windows 3.0, 3.1, 3.11 / Windows for
+  Workgroups. The Program Manager, File Manager, Solitaire,
+  Minesweeper, Write, Paint. Old business apps and CAD tools that
+  shipped for Win 3.x.
+- **Win16 binaries** — software that targeted the 16-bit Windows
+  API and runs under Win 3.x. Often labelled "Windows 3.1" on the
+  box.
+- **Some early Win32s applications.** Win32s was a 32-bit
+  extension layer for Windows 3.x. Coverage is partial; the
+  DOSBox-X project tracks specific titles.
+
+### What it **cannot** run
+
+- **Windows 95, 98, ME.** These run *inside* DOSBox-X under
+  certain configurations (it's an x86 PC emulator), but
+  performance and reliability vary widely. Ash Nazg v1 does NOT
+  ship a Win 95+ profile; treating it as supported would be
+  dishonest.
+- **Windows NT 4 / 2000 / XP / Vista / 7 / 8 / 10 / 11.** Out of
+  scope. These need different engines (Wine for compatible Win32
+  apps; full hypervisors for the OSes themselves). v2 may add a
+  Wine engine for Win32 apps; that's a separate change, not a
+  DOSBox-X capability.
+- **Modern Win64 binaries.** Anything compiled in the last decade
+  for x86_64 Windows. Out of scope for the same reason.
+- **macOS, Linux, BSD binaries.** Detected and refused with
+  `415 Unsupported Media Type` (per the `detection` capability
+  spec). Future engines may handle these.
+- **Java archives, WebAssembly modules.** Detected, refused, same
+  reason.
+- **DRM-protected commercial software** that depends on
+  contemporary online activation. Even if the binary is Win 3.x
+  in shape, a DRM check that needs a 2020s Microsoft activation
+  server will not work.
+- **3D-accelerated games.** No GPU passthrough in v1; software
+  rendering only. Doom and Quake-era games are fine; anything
+  expecting hardware acceleration will be slow or broken.
+- **Audio.** No audio routing from the engine to the browser in
+  v1. The KasmVNC stream is video-only.
+
+### Heuristics
+
+If you can answer "yes" to most of these, it'll probably run:
+
+- Was the program released between roughly **1985 and 1998**?
+- Did the box mention **DOS** or **Windows 3.x**?
+- Is the executable **smaller than 100 MB**?
+- Did the original ship on **floppies or a single CD**, with no
+  online-only activation?
+
+If those are mostly "no", v1 is the wrong tool.
+
+### Future engines
+
+Out of scope for v1, but designed for as drop-in additions:
+
+| Engine | Targets | Status |
+|---|---|---|
+| Wine | Modern Win32 / Win64 apps | Designed for; not in v1 |
+| RetroArch | Console emulation (NES, SNES, Genesis, …) | Designed for; not in v1 |
+| JVM | Java applications and applets | Designed for; not in v1 |
+| wasmtime | WebAssembly modules | Designed for; not in v1 |
+
+Each is its own future OpenSpec change. None ship in v1.
+
+## Other limitations in v1
+
+The capability scope above (what DOSBox-X v1 can and cannot run)
+is the main one. A few smaller v1 caveats not already covered
+there:
+
+- **One streaming protocol: KasmVNC.** No alternative chrome.
+- **No clipboard sync** between the iframe and the surrounding
+  Nextcloud UI.
+- **No multi-tenant concurrent sessions** beyond admin-only
+  single-session.
+- **No file-watch / cron triggers** — every Run is user-initiated.
+
+None of these is a bug; all are intentionally out of scope for v1
+and tracked in subsequent OpenSpec changes.
 
 ## Troubleshooting (placeholder)
 

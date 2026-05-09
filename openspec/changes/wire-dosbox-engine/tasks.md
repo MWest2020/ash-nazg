@@ -35,14 +35,55 @@
 - [ ] 3.3 Per-dispatch audit-log entry per `detection` and
         `sandbox` specs.
 
-## 4. AppAPI registration
+## 4. AppAPI registration (AppAPI 5.x)
 
 - [ ] 4.1 `appapi.register()` becomes real (replaces
-        `NotImplementedError`).
+        `NotImplementedError`). Builds and POSTs the canonical
+        payload to `{NEXTCLOUD_URL}/index.php/apps/app_api/api/v1/exapp/register`
+        per `design.md` § *AppAPI registration handshake*.
 - [ ] 4.2 Wired into the FastAPI `lifespan` hook so it runs at
-        startup.
-- [ ] 4.3 Exponential-backoff retry up to 5 minutes; non-zero exit
-        on persistent failure (HaRP will restart).
+        startup, before the server starts accepting `/run`.
+- [ ] 4.3 Payload **MUST** include the host shim's actual listen
+        port (`APP_PORT` env), so AppAPI stores the correct value in
+        `oc_ex_apps.port` directly — no scaffold-era SQL UPDATE.
+- [ ] 4.4 Payload **MUST** declare every proxy route the ExApp
+        wants to expose (`/health`, `/admin/settings`,
+        `/selftest`, `/run`, plus the static-bundle paths).
+        Without this, the AppAPI proxy 404s; with it, NC users
+        reach the admin page through the canonical
+        `/index.php/apps/app_api/proxy/ash_nazg/...` URL.
+- [ ] 4.5 Exponential-backoff retry up to 5 minutes; non-zero exit
+        on persistent failure. Distinguish "AppAPI unreachable"
+        from "AppAPI rejected manifest" in the error log.
+
+## 4b. Retire the scaffold port-poke (acceptance gate)
+
+- [ ] 4b.1 Delete the `oc_ex_apps.port` SQL UPDATE block from
+        `scripts/bootstrap-nextcloud.sh`. Re-run
+        `scripts/verify-against-nextcloud.sh` against the migrated
+        target (NC 32 + AppAPI 5.x). All assertions still pass —
+        proves the handshake set the port, not us.
+- [ ] 4b.2 Remove the "by design 404" caveat for the proxy URL
+        from `docs/testing.md`. Add a positive assertion in
+        `verify-against-nextcloud.sh` that
+        `GET /index.php/apps/app_api/proxy/ash_nazg/health`
+        through NC's basic-auth returns the canonical
+        `{"status":"ok","app":"ash_nazg",…}` body.
+
+## 4c. Test-target migration (NC 30 → NC 32)
+
+- [ ] 4c.1 `scripts/local-nextcloud-stack.yml` — bump
+        `nextcloud:30-apache` → `nextcloud:32-apache`. Verify
+        postgres + valkey image tags still resolve cleanly against
+        NC 32's PHP version.
+- [ ] 4c.2 If AppAPI 5.x has shifted any positional args on
+        `app_api:daemon:register` or `app_api:app:register`, update
+        `scripts/bootstrap-nextcloud.sh` to match. Document the
+        diff inline.
+- [ ] 4c.3 `docs/installation.md` — bump the documented minimum
+        Nextcloud version to 32 and AppAPI to 5.x. NC 30 + AppAPI
+        4.0.6 stays only in `CHANGELOG.md` as the historical
+        first-verified target.
 
 ## 5. Engine container entrypoint
 

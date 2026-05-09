@@ -40,15 +40,55 @@ Browser              Host shim                     Deploy daemon (HaRP)         
 - Admin settings can disable individual engines; the registry
   filters disabled engines out of dispatch.
 
-## AppAPI registration handshake
+## AppAPI registration handshake (AppAPI 5.x)
 
-- Triggered at host startup (FastAPI `lifespan` hook).
-- `POST {NEXTCLOUD_URL}/index.php/apps/app_api/api/v1/exapp/register`
-  with `EX_APP_ID`, version, host:port, declared scopes, and the
-  AppAPI shared secret.
-- On 200 → host enters serving state. On 4xx/5xx → host logs the
-  payload, retries with exponential backoff up to 5 minutes, then
-  exits non-zero (HaRP will restart it).
+Triggered at host startup (FastAPI `lifespan` hook). One handshake
+call from the ExApp to AppAPI, replacing several pieces of
+post-install hand-holding that 4.0.6 needed.
+
+**Endpoint.** `POST {NEXTCLOUD_URL}/index.php/apps/app_api/api/v1/exapp/register`
+
+**Payload (canonical fields, names per AppAPI 5.x):**
+
+| Field | Purpose | Why we need it |
+|---|---|---|
+| `appid` | `ash_nazg` | Identity |
+| `version` | host shim's version | Matches `<version>` in info.xml |
+| `secret` | per-deploy shared secret | AppAPI uses it to sign callbacks back to the ExApp |
+| `host` | the host shim's address from AppAPI's POV | For our manual-install model: `ash-nazg-host` (compose DNS name) |
+| `port` | what the host shim is **actually** listening on | **Replaces the 4.0.6 DB-poke workaround.** AppAPI stores this verbatim in `oc_ex_apps.port`; no auto-allocation, no UPDATE. |
+| `routes` | every URL path the AppAPI proxy may forward | Populates `oc_ex_apps_routes`. Without this the proxy 404s — that was the gap in the level-3 verifier under 4.0.6. |
+| `scopes` | requested AppAPI scopes (must match info.xml) | `FILES`, `AUDIT_LOGS`, `NOTIFICATIONS` |
+| `external` | true | We're not a docker-install ExApp |
+
+**Behaviour.**
+
+- On `200 OK` from AppAPI → host enters serving state, starts
+  accepting `/run` requests.
+- On `4xx/5xx` → log the AppAPI response body (helpful for
+  diagnosing a misconfigured manifest), retry with exponential
+  backoff (5 s, 15 s, 45 s, …) up to 5 minutes, then exit
+  non-zero. The compose `restart: unless-stopped` policy (or
+  HaRP, in non-manual-install deployments) brings the container
+  back.
+- On network unreachable (NC not yet up) → same backoff, but the
+  error log distinguishes "could not reach AppAPI" from "AppAPI
+  rejected our payload" so the operator sees the right thing.
+
+**What this retires from the scaffold.**
+
+- `bootstrap-nextcloud.sh`'s `oc_ex_apps.port` UPDATE — gone, the
+  handshake sets the right port directly.
+- The "AppAPI proxy 404 by design" caveat in
+  `docs/testing.md` — once routes register, the proxy works.
+- The placeholder `register()` in `host/src/ash_nazg/appapi.py`
+  raising `NotImplementedError`.
+
+**Acceptance signal.** After this lands, deleting the SQL UPDATE
+from `bootstrap-nextcloud.sh` and re-running
+`scripts/verify-against-nextcloud.sh` produces a working install.
+That's the boring-and-verifiable definition of "the handshake is
+the source of truth, not the workaround".
 
 ## Self-test wiring
 

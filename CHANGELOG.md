@@ -57,6 +57,76 @@ the Ash Nazg ExApp.
   three scaffold endpoints. Slightly more than the spec asked for
   ("a single passing test"), kept boring and assertive.
 
+### Changed — 2026-05-09 — `wire-dosbox-engine` proposal: 3 acceptance additions
+
+Three explicit additions to the `wire-dosbox-engine` change so its
+exit criteria are concrete and testable rather than vibes-based.
+
+#### 1. Test target migrates to NC 32 + AppAPI 5.x
+
+`init-mvp-runtime` verified against `nextcloud:30-apache` (AppAPI
+4.0.6). `wire-dosbox-engine` migrates to `nextcloud:32-apache` with
+AppAPI 5.x because:
+
+- NC 30 is approaching end-of-maintenance; NC 32 is the actively
+  supported release.
+- AppAPI 5.x has the registration handshake we actually need —
+  the ExApp advertises its listen port and routes back to AppAPI
+  rather than AppAPI auto-allocating a port that doesn't match
+  reality.
+
+Operationally: bump compose tag, possibly tweak
+`bootstrap-nextcloud.sh` if AppAPI 5.x has shifted command args,
+delete the SQL UPDATE workaround, bump `docs/installation.md`
+minimum to NC 32.
+
+NC 30 + AppAPI 4 stays in `CHANGELOG.md` as the historical
+first-verified target — record, not support claim.
+
+#### 2. `oc_ex_apps.port` SQL UPDATE retirement is an acceptance criterion
+
+The scaffold's `bootstrap-nextcloud.sh` patches `port=8080` via a
+direct DB UPDATE because AppAPI 4.0.6 manual-install auto-
+allocates a port (~23000) and provides no override. The wiring
+change retires this **explicitly**:
+
+- `appapi.register()` POSTs the host shim's actual listen port to
+  AppAPI's `/exapp/register` endpoint. AppAPI 5.x stores it
+  verbatim. No DB poke.
+- Acceptance: delete the SQL UPDATE block from the bootstrap, re-
+  run `verify-against-nextcloud.sh` — all assertions still pass.
+- Plus a positive assertion that the AppAPI proxy URL
+  `/index.php/apps/app_api/proxy/ash_nazg/health` returns the
+  canonical `{"status":"ok",…}` body (not 404). That's the signal
+  that route registration also worked.
+
+This converts the "by design 404" caveat in `docs/testing.md`
+into a positive test — once the handshake works, the proxy works.
+
+#### 3. `docs/user-guide.md` — explicit DOSBox-X v1 capability scope
+
+New "What DOSBox-X v1 can and cannot run" section, written now
+even though it lives in the user guide. Calls out:
+
+- **Can**: MS-DOS / FreeDOS programs, Win 3.0/3.1/3.11, Win16
+  binaries, partial Win32s.
+- **Cannot**: Win 95/98/ME (out of scope for v1 even though
+  DOSBox-X technically supports it), NT/2000/XP/Vista/7/8/10/11,
+  modern Win64, Mach-O, ELF, JVM, WASM, DRM-protected modern
+  software, GPU-accelerated games, audio.
+- **Heuristic**: 1985–1998 release window, "DOS" or "Windows 3.x"
+  on the box, ≤100 MB executable, no online-only activation.
+- **Future engines** (Wine, RetroArch, JVM, wasmtime) listed as
+  "designed for, not in v1" so users know the architecture
+  supports the gap.
+
+Same wording will land in the App Store listing's description
+when v1 ships. Honest scope upfront prevents support requests
+from people expecting a Wine-tier compatibility layer.
+
+`openspec validate wire-dosbox-engine` and `init-mvp-runtime` both
+pass after these edits.
+
 ### Added — 2026-05-09 — Stage-3 (level-3) verifier — full Nextcloud install smoke
 
 `scripts/verify-against-nextcloud.sh` upgraded from placeholder to a
