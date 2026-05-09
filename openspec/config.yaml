@@ -93,7 +93,7 @@ rules:
       or the host shim, say so explicitly.
     - Call out any change to the security posture (admin-only, resource
       limits, audit logging) — these need extra review.
-    - Include a "boring valkuil" section: where could we be tempted to
+    - Include a "boring valkuil" section — where could we be tempted to
       do something clever instead of standard? Default to standard.
 
   specs:

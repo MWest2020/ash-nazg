@@ -146,21 +146,27 @@
 
 - [ ] 9.1 `docker build` succeeds for both host and dosbox-x engine
         images locally.
-- [ ] 9.2 `openspec validate init-mvp-runtime` passes with no warnings.
+- [x] 9.2 `openspec validate init-mvp-runtime` passes with no warnings.
 - [ ] 9.3 The placeholder host container, when run with `docker run`,
         responds 200 on `/health`.
 - [ ] 9.4 Frontend builds without errors via `npm run build`.
-- [ ] 9.5 `info.xml` validates against the Nextcloud app schema
-        (`occ app:check ash-nazg` on a dev instance, or the schema
-        validator from `nextcloud/appstore`).
+- [x] 9.5 `info.xml` validates against the Nextcloud app schema
+        (`occ app:check ash_nazg` on a dev instance, or the schema
+        validator from `nextcloud/appstore`). Implemented via
+        `scripts/verify-info-xml.sh` (canonical NC XSD + AppAPI rule
+        checks). The `occ app:check` portion still wants verification
+        on a real instance during §9 smoke-testing.
 
 ## 10. Hand-off to next change
 
-- [ ] 10.1 Open the next change with `/opsx:propose wire-dosbox-engine`.
+- [x] 10.1 Open the next change with `/opsx:propose wire-dosbox-engine`.
         Its scope: implement the dispatcher logic, the engine
         spawn/lifecycle, and the file action so a user can actually
         click Run and see DOSBox-X start. Streaming and WebDAV mount
-        are separate subsequent changes.
+        are separate subsequent changes. Created via
+        `openspec new change wire-dosbox-engine`; proposal/design/
+        tasks/specs/dispatch all written in DRAFT form so the change
+        validates and the next session has a real foundation.
 - [ ] 10.2 Archive this change with `/opsx:archive init-mvp-runtime`.
         Confirm specs merge into `openspec/specs/`.
 

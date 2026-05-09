@@ -57,6 +57,69 @@ the Ash Nazg ExApp.
   three scaffold endpoints. Slightly more than the spec asked for
   ("a single passing test"), kept boring and assertive.
 
+### Added — 2026-05-09 — Open `wire-dosbox-engine` change (§10.1)
+
+Successor change scaffolded so the next session has a real
+landing zone. Created via `openspec new change wire-dosbox-engine`,
+then filled in:
+
+- `openspec/changes/wire-dosbox-engine/proposal.md` — Why / What
+  Changes / Impact. Scope: dispatcher + engine spawn lifecycle +
+  AppAPI registration + real self-test + working engine entrypoint.
+  Explicitly out of scope: KasmVNC streaming proxy, admin-settings
+  persistence, App Store submission. "Boring valkuil" section
+  parks three concrete temptations (custom websocket proxy,
+  `docker cp` instead of davfs2, hardcoded `engine == 'dosbox-x'`).
+- `openspec/changes/wire-dosbox-engine/design.md` — sequence
+  diagram for the first wired Run, engine-registry contract,
+  AppAPI registration handshake, self-test wiring table, three
+  named valkuilen.
+- `openspec/changes/wire-dosbox-engine/tasks.md` — 26 tasks
+  across 9 sections (registry, dosbox-x plugin, dispatcher, AppAPI
+  register, engine entrypoint, frontend wiring, real self-test,
+  tests, hand-off).
+- `openspec/changes/wire-dosbox-engine/specs/dispatch/spec.md` —
+  two ADDED requirements (dispatcher selects first matching
+  enabled engine; self-test reports real per-check status) with a
+  total of five scenarios. Each requirement leads with `SHALL` on
+  line 1 (validator gotcha already documented in CONTRIBUTING.md).
+- `openspec/config.yaml` — fixed a pre-existing YAML parse error
+  on line 96 (a colon in a multi-line scalar). Replaced with an
+  em-dash separator. The error pre-dated this session but
+  surfaced when `openspec new change` ran.
+
+`openspec validate wire-dosbox-engine` passes; the spec is
+explicitly DRAFT in every doc heading so the next implementation
+session can flesh out tasks and add further spec deltas without
+fighting prior commitments.
+
+#### Hand-off (§10.2) — NOT done in this batch
+
+`openspec archive init-mvp-runtime` deliberately not run. Three
+items still want a real Nextcloud or explicit approval:
+
+- §0 preflight (AppAPI version verify, HaRP availability check,
+  app id reservation).
+- §9.1 / §9.3 / §9.4 (docker build of host + engine; in-container
+  `/health` 200 check; `npm run build` after first lockfile
+  generation).
+- §1.1 git push.
+
+Archive moves the specs from `openspec/changes/init-mvp-runtime/`
+into the canonical `openspec/specs/` tree. After that any change
+to those specs requires a new OpenSpec change. Recommended order:
+smoke-test on Docker → push → archive.
+
+#### Tasks ticked
+
+- 9.2 (`openspec validate init-mvp-runtime` passes — verified
+  multiple times in this session).
+- 9.5 (`info.xml` schema validation wired via
+  `scripts/verify-info-xml.sh` and the `verify-info-xml.yml`
+  workflow; `occ app:check` portion still wants real-NC
+  verification during §9 smoke-testing).
+- 10.1 (next change opened with full DRAFT content).
+
 ### Added — 2026-05-08 — Host-side admin settings + self-test stub (§11)
 
 Per task §11.1, §11.2, §11.4, §11.5, §11.6. Closes the host-side
