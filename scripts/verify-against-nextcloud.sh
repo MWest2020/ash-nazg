@@ -4,10 +4,16 @@
 # LEVEL 3 verifier — full ephemeral Nextcloud install verification.
 #
 # Brings up `scripts/local-nextcloud-stack.yml` (postgres + valkey +
-# nextcloud + ash-nazg-host), waits for everything to settle, runs
-# `scripts/bootstrap-nextcloud.sh` to install AppAPI and register
-# the ExApp, asserts that NC can reach the host shim's `/health`
-# endpoint over the compose network, and tears the stack down.
+# nextcloud + appapi-harp), runs `scripts/bootstrap-nextcloud.sh`
+# to install AppAPI, register the HaRP daemon, and deploy the
+# ash_nazg ExApp. Asserts the AppAPI proxy URL works and the
+# HaRP-spawned container is healthy. Tears down at the end.
+#
+# wire-dosbox-engine §1 STATUS: foundation complete (HaRP boots,
+# daemon registers, FRP tunnels the docker socket, AppAPI calls
+# deploy). Final deploy gated on §2 (image must be on a real
+# registry). Run with the host image already tagged on a registry
+# HaRP can reach.
 #
 # In CI this runs on `v*.*.*` tag pushes and on `workflow_dispatch`.
 # Per `docs/testing.md`, this is the gate that must be green before
@@ -35,7 +41,20 @@ err()  { printf '\033[31m!!\033[0m %s\n'  "$*" >&2; }
 
 cd "${REPO_ROOT}"
 
+# Local-dev workaround: HaRP's frpc needs to connect() the
+# rootless-podman socket. Default 0660 perms blocks container
+# access. Bump to 0666 for the duration; restore in cleanup.
+SOCKET_PATH="${SOCKET_PATH:-/run/user/$(id -u)/podman/podman.sock}"
+SOCKET_PERMS_BEFORE=""
+if [[ -S "${SOCKET_PATH}" ]]; then
+    SOCKET_PERMS_BEFORE="$(stat -c '%a' "${SOCKET_PATH}")"
+    chmod 0666 "${SOCKET_PATH}" 2>/dev/null || true
+fi
+
 cleanup() {
+    if [[ -n "${SOCKET_PERMS_BEFORE}" && -S "${SOCKET_PATH}" ]]; then
+        chmod "${SOCKET_PERMS_BEFORE}" "${SOCKET_PATH}" 2>/dev/null || true
+    fi
     if [[ "${KEEP_STACK}" == "1" ]]; then
         log "KEEP_STACK=1 — leaving stack running. Tear down manually with:"
         log "  docker compose -f ${COMPOSE_FILE} down -v"

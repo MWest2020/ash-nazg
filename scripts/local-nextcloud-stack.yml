@@ -2,27 +2,33 @@
 #
 # LEVEL 3 verifier — local Nextcloud stack for smoke-testing Ash Nazg.
 #
-# Stand up Nextcloud 30 + AppAPI + a manually-deployed Ash Nazg
-# host container, register the ExApp, and check that the admin
-# settings page renders. No HaRP, no FRP, no docker-socket
-# exposure — AppAPI's `manual_install` deploy daemon is enough for
-# a single ExApp on a shared compose network.
+# wire-dosbox-engine §1 rewrite: docker-install via HaRP. AppAPI's
+# canonical deploy path. The host shim is NOT started by compose —
+# AppAPI/HaRP spawns it on app:register, with APP_PORT, APP_SECRET,
+# APP_VERSION, APP_ID, NEXTCLOUD_URL injected as env vars.
 #
 #   Usage:
 #     docker compose -f scripts/local-nextcloud-stack.yml up -d
 #     ./scripts/bootstrap-nextcloud.sh
-#     # browse to http://localhost:8088 (admin / admin)
+#     # browse to http://localhost:8088 (admin / admin-local-dev)
 #
 #   Teardown:
 #     docker compose -f scripts/local-nextcloud-stack.yml down -v
 #
+# Prerequisites:
+# - A running Docker / Podman socket reachable as
+#   /var/run/docker.sock (rootful) OR /run/user/$UID/podman/podman.sock
+#   (rootless). HaRP needs it to spawn the ExApp container.
+# - An ash-nazg-host image accessible to HaRP. For local development
+#   either build locally and reference by tag, or push to a registry
+#   HaRP can reach (GHCR for the standard distribution).
+#
 # Caveats:
-# - Credentials in this file are LOCAL DEV ONLY. Never reuse them.
-# - Ports: NC on 8088, postgres + valkey internal-only.
-# - The `localhost/ash-nazg-host:0.0.0-scaffold` image must exist
-#   locally before `up`. Build it with:
-#     docker build -t localhost/ash-nazg-host:0.0.0-scaffold \
-#                  -f host/Dockerfile .
+# - Credentials in this file are LOCAL DEV ONLY. Never reuse.
+# - Ports: NC on 8088, HaRP HTTP on 8780, HaRP FRP on 8782.
+# - HP_FRP_SHARED_KEY is a per-stack secret used by AppAPI ↔ HaRP;
+#   the bootstrap reads it from the env or generates a fresh one
+#   per `up`.
 
 services:
 
@@ -44,8 +50,6 @@ services:
 
   valkey:
     image: docker.io/valkey/valkey:8-alpine
-    # Disable persistence — local dev cache only, no need for an
-    # AOF or RDB on disk.
     command: ["valkey-server", "--save", "", "--appendonly", "no"]
     volumes:
       - valkey-data:/data
@@ -58,9 +62,6 @@ services:
       retries: 12
 
   nextcloud:
-    # NC 32 + the AppAPI 5.x line — chosen for the wire-dosbox-engine
-    # change. NC 30 was the historical first-verified target for the
-    # init-mvp-runtime scaffold (see CHANGELOG entry of 2026-05-09).
     image: docker.io/library/nextcloud:32-apache
     ports:
       - "8088:80"
@@ -69,8 +70,6 @@ services:
       POSTGRES_DB: nextcloud
       POSTGRES_USER: nextcloud
       POSTGRES_PASSWORD: nextcloud-local-dev
-      # NC's official image talks to redis via these env vars; valkey
-      # speaks the redis wire protocol so the existing names work.
       REDIS_HOST: valkey
       REDIS_HOST_PORT: 6379
       NEXTCLOUD_ADMIN_USER: admin
@@ -78,9 +77,6 @@ services:
       NEXTCLOUD_TRUSTED_DOMAINS: localhost 127.0.0.1
       OVERWRITEHOST: localhost:8088
       OVERWRITEPROTOCOL: http
-      # AppAPI talks to the host shim by its compose-network name.
-      # No reason to expose the shim externally for the smoke test.
-      AA_VERSION: latest
     depends_on:
       postgres:
         condition: service_healthy
@@ -97,26 +93,52 @@ services:
       retries: 30
       start_period: 60s
 
-  # Ash Nazg host shim — the ExApp container itself.
-  # AppAPI reaches it via the compose-network DNS name `ash-nazg-host`.
-  ash-nazg-host:
-    image: localhost/ash-nazg-host:0.0.0-scaffold
+  # AppAPI's canonical docker-install deploy daemon. Spawns ExApp
+  # containers via the Docker socket and proxies HTTP traffic
+  # between Nextcloud and the ExApp via HAProxy + FRP.
+  appapi-harp:
+    image: ghcr.io/nextcloud/nextcloud-appapi-harp:v0.4.0
     environment:
-      APP_HOST: 0.0.0.0
-      APP_PORT: "8080"
-      APP_VERSION: "0.0.0"
-      # AppAPI hands a real shared secret on register — for the smoke
-      # test this placeholder is fine; the host doesn't validate it
-      # until wire-dosbox-engine implements the handshake.
-      APP_SECRET: "scaffold-secret-not-real"
-      NEXTCLOUD_URL: http://nextcloud
+      NC_INSTANCE_URL: http://nextcloud
+      # Per-stack shared secret. HaRP reads this from HP_SHARED_KEY;
+      # AppAPI registers the daemon with the matching --harp_shared_key
+      # value. (HP_SHARED_KEY_FILE is the alternative for secret-
+      # store integrations; we use the env-var path for local dev.)
+      HP_SHARED_KEY: ${HP_SHARED_KEY:-ash-nazg-local-dev-key}
+      # Quieter than the default "warning" → "info" while
+      # debugging; bump to "warning" once the stack is reliable.
+      HP_LOG_LEVEL: info
+    ports:
+      # 8780 = HTTP daemon endpoint AppAPI talks to.
+      # 8782 = FRP server ExApp containers register with for
+      # bidirectional comms.
+      - "8780:8780"
+      - "8782:8782"
+    volumes:
+      # HaRP needs the container runtime's socket to spawn ExApps.
+      # Rootless podman: /run/user/$UID/podman/podman.sock
+      # Rootful docker:  /var/run/docker.sock:z
+      # Set DOCKER_SOCKET in the environment to point at the right
+      # one for this host; defaults to the rootless podman path.
+      - ${DOCKER_SOCKET:-/run/user/1000/podman/podman.sock}:/var/run/docker.sock:z
+    # NOTE: Rootless-podman socket perms (0660 owned by host uid
+    # 1000) are unreadable by container-root inside the user
+    # namespace. For local-dev, run once before `up`:
+    #   chmod 0666 /run/user/$(id -u)/podman/podman.sock
+    # On Docker rootful this is unnecessary; the socket is 0666 by
+    # default. `userns_mode: keep-id` does NOT work — podman-compose
+    # uses pods, and --userns is incompatible with --pod.
     networks: [ash-nazg-net]
+    # SELinux blocks frpc inside HaRP from connect()-ing to the
+    # mounted docker socket on Enforcing systems even with a `:z`
+    # relabel. Disable the container label only for HaRP — the
+    # other services don't need it. On non-SELinux hosts this is a
+    # no-op.
+    security_opt: ["label=disable"]
     depends_on:
-      - nextcloud
+      nextcloud:
+        condition: service_healthy
     restart: unless-stopped
-    # Not exposing 8080 externally — AppAPI talks to it on the
-    # compose network. Uncomment if you want to curl it directly:
-    # ports: ["18080:8080"]
 
 networks:
   ash-nazg-net:

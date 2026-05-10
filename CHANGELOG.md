@@ -57,6 +57,103 @@ the Ash Nazg ExApp.
   three scaffold endpoints. Slightly more than the spec asked for
   ("a single passing test"), kept boring and assertive.
 
+### Archived — 2026-05-10 — `init-mvp-runtime` archived; 35 spec deltas merged
+
+`openspec archive init-mvp-runtime -y` ran clean. Six new spec
+files materialise in `openspec/specs/`:
+
+  detection: 4 requirements
+  engines: 6 requirements
+  files-integration: 6 requirements
+  nextcloud-distribution: 7 requirements
+  nextcloud-frontend: 6 requirements
+  sandbox: 6 requirements
+
+Change folder moved to
+`openspec/changes/archive/2026-05-10-init-mvp-runtime/`. Archive
+proceeded with 51/59 tasks complete (`--yes`); the 8 open items
+are §0 preflight (covered by Stage 1+3 smoke tests this session),
+§9.1/9.3/9.4 (Stage 1), §1.1 (push), and §10.2 (this archive).
+
+### Progress — 2026-05-10 — wire-dosbox-engine §1: HaRP foundation validated
+
+Started the HaRP-based level-3 verifier rewrite. The architecture
+is fully validated; final deploy gated on §2 (image must be on a
+real registry).
+
+#### What landed
+
+- `scripts/local-nextcloud-stack.yml` — `appapi-harp` service
+  added (`ghcr.io/nextcloud/nextcloud-appapi-harp:v0.4.0`). The
+  `ash-nazg-host` service is removed — HaRP spawns the ExApp
+  container on demand. `HP_SHARED_KEY` env var (not the
+  `HP_FRP_SHARED_KEY` I initially guessed) — corrected after
+  HaRP's startup error. SELinux `:z` mount label on the docker
+  socket. `security_opt: ["label=disable"]` for HaRP only —
+  necessary on Enforcing systems for frpc to `connect()` the
+  mounted unix socket. Comments document why.
+- `scripts/bootstrap-nextcloud.sh` rewritten:
+    - Registers the HaRP daemon via
+      `app_api:daemon:register harp ... docker-install ... --harp
+       --harp_frp_address ... --harp_shared_key ...`.
+    - Replaces the `--info-xml=/dev/stdin` heredoc with a
+      `tar -cf - | dc exec tar -xf -` pipe (`podman-compose ps -q
+      <svc>` is unsupported, so `docker cp $(dc ps -q nc)` doesn't
+      work).
+    - **Deletes** the `oc_ex_apps.port` SQL UPDATE — HaRP
+      allocates the port and starts the container with
+      `APP_PORT=<that>` env var directly.
+    - `app:register --wait-finish` blocks until HaRP has spawned
+      and AppAPI's heartbeat passes.
+- `scripts/verify-against-nextcloud.sh` — the local-dev rootless
+  podman socket workaround (chmod 0666 before, restore after) is
+  baked into the verifier so re-runs work without manual prep.
+
+#### What's validated end-to-end (architecture)
+
+| Layer | Status |
+|---|---|
+| HaRP image found + pinned to v0.4.0 | ✅ |
+| HaRP boots (HAProxy + frps + frpc + SPOA) | ✅ |
+| AppAPI ↔ HaRP daemon registration on :8780 | ✅ |
+| HaRP detects /var/run/docker.sock + auto-generates frpc-docker.toml | ✅ |
+| FRP client `bundled-deploy-daemon` registers with frps | ✅ |
+| frpc can `connect()` the mounted socket | ✅ (after :z + chmod + label=disable) |
+| `curl --unix-socket /var/run/docker.sock /_ping` returns 200 | ✅ |
+| Docker daemon receives pull requests from HaRP | ✅ |
+
+#### What §1 still needs (gated on §2)
+
+`POST /images/create?fromImage=ghcr.io/mwest2020/ash-nazg-host:0.0.0-scaffold`
+returns 404 because the image isn't on GHCR yet. AppAPI always
+pulls before deploy (security/freshness — it doesn't trust local
+caches). Tagging the local image as the GHCR ref doesn't help.
+This is exactly what §2 (GHCR image-pull validation) was queued
+to handle.
+
+#### Local-dev rootless-podman friction (documented inline)
+
+Three tweaks are needed on Enforcing-SELinux + rootless-podman
+hosts; `chmod 0666 /run/user/$(id -u)/podman/podman.sock` (handled
+in the verifier wrapper), `:z` on the volume mount (in the
+compose), and `security_opt: ["label=disable"]` on HaRP (in the
+compose). On Docker rootful (CI runners, most production paths)
+none of this is needed. The verifier restores 0660 perms on exit.
+
+#### Discoveries surfaced for the AppAPI ecosystem
+
+- HaRP image: `ghcr.io/nextcloud/nextcloud-appapi-harp:v0.4.0`
+  (the `cloud-py-api/...` paths I initially tried return 403; the
+  canonical org is `nextcloud`).
+- HaRP includes `frpc` and auto-generates `frpc-docker.toml` when
+  it sees `/var/run/docker.sock` — so a single container handles
+  both the FRP server and client roles. No separate FRP-client
+  container needed.
+- Required env: `HP_SHARED_KEY` (not `HP_FRP_SHARED_KEY`).
+- `app_api:daemon:register --harp` adds the FRP-mode flags to the
+  daemon record; without `--harp` the daemon is rejected when
+  AppAPI tries to use it for FRP-tunneled calls.
+
 ### Decided — 2026-05-09 — wire-dosbox-engine §4.0: option (c) — HaRP/docker-install for both prod and level-3
 
 Following yesterday's AppAPI 5.x manual-install discovery, the
