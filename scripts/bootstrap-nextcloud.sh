@@ -34,7 +34,12 @@ NC_SVC="${NC_SVC:-nextcloud}"
 APP_ID="ash_nazg"
 APP_VERSION="0.0.0"
 DAEMON_NAME="harp"
-NC_NET="ash-nazg-net"
+# Compose project name is the dirname of the compose file ("scripts").
+# The network as the host's container runtime sees it is therefore
+# `scripts_ash-nazg-net`, not the bare `ash-nazg-net` declared in the
+# yaml. AppAPI's `--net` flag needs the runtime-visible name so HaRP
+# can attach the spawned ExApp to the same network as Nextcloud.
+NC_NET="${NC_NET:-scripts_ash-nazg-net}"
 
 # Match the compose default; override via env if you customise it.
 HARP_SHARED_KEY="${HP_SHARED_KEY:-ash-nazg-local-dev-key}"
@@ -116,11 +121,28 @@ log "registering ExApp '${APP_ID}' …"
 if occ app_api:app:list 2>/dev/null | grep -q "${APP_ID} "; then
     ok "ExApp '${APP_ID}' already registered"
 else
-    # podman-compose's `ps -q <svc>` is rejected; use a tar pipe
-    # through `dc exec` to copy info.xml in without needing the
-    # underlying container name.
-    tar -cf - -C appinfo info.xml \
-        | dc exec -T "${NC_SVC}" tar -xf - -C /tmp/
+    # Push the local host image to the local registry so HaRP can
+    # pull it through the AppAPI deploy flow. Skip if already tagged.
+    if ! docker manifest inspect 127.0.0.1:5000/ash-nazg-host:${APP_VERSION}-scaffold >/dev/null 2>&1; then
+        log "pushing host image to local registry …"
+        docker tag localhost/ash-nazg-host:${APP_VERSION}-scaffold \
+                   127.0.0.1:5000/ash-nazg-host:${APP_VERSION}-scaffold
+        docker push --tls-verify=false \
+                   127.0.0.1:5000/ash-nazg-host:${APP_VERSION}-scaffold
+    fi
+
+    # Patch info.xml in-flight so <registry> + <image> point at the
+    # local registry rather than ghcr.io. Image ref from the host
+    # daemon's POV is `127.0.0.1:5000/ash-nazg-host:...`. From inside
+    # the compose net it's `registry:5000/...` — but HaRP forwards
+    # the pull to the *host's* docker daemon via FRP, so 127.0.0.1
+    # is the right address.
+    sed -e 's|<registry>ghcr.io</registry>|<registry>127.0.0.1:5000</registry>|' \
+        -e 's|<image>mwest2020/ash-nazg-host</image>|<image>ash-nazg-host</image>|' \
+        appinfo/info.xml > /tmp/info.xml.local
+
+    tar -cf - -C /tmp info.xml.local \
+        | dc exec -T "${NC_SVC}" sh -c 'cd /tmp && tar -xf - && mv info.xml.local info.xml'
     # `--wait-finish` blocks until HaRP has actually spawned the
     # container and AppAPI's heartbeat check succeeds. Without it
     # the register returns immediately and the ExApp is only

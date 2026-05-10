@@ -88,6 +88,14 @@ EXPOSE 8080
 # Liveness independent of AppAPI's /heartbeat handshake, so an
 # orchestrator can probe the container even before AppAPI registration.
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
-    CMD python -c "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8080/health',timeout=3).status==200 else 1)"
+    CMD python -c "import os,urllib.request,sys; sys.exit(0 if urllib.request.urlopen(f'http://127.0.0.1:{os.environ.get(\"APP_PORT\",\"8080\")}/health',timeout=3).status==200 else 1)"
 
-CMD ["uvicorn", "ash_nazg.main:app", "--host", "0.0.0.0", "--port", "8080"]
+# When AppAPI/HaRP spawns this container as a docker-install
+# ExApp, APP_PORT comes in as an env var assigned by AppAPI (e.g.
+# APP_PORT=23000). APP_HOST also comes in but with value 127.0.0.1
+# — the "AppAPI expects an in-container frpc to reverse-tunnel"
+# convention. We don't ship frpc inside the host image; instead we
+# bind uvicorn on 0.0.0.0 so NC (and HaRP's HTTP proxy on 8780)
+# can reach the container's port directly via its compose-network
+# IP. The APP_HOST env from HaRP is ignored.
+CMD ["sh", "-c", "exec uvicorn ash_nazg.main:app --host 0.0.0.0 --port ${APP_PORT:-8080}"]

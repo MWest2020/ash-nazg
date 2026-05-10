@@ -57,6 +57,116 @@ the Ash Nazg ExApp.
   three scaffold endpoints. Slightly more than the spec asked for
   ("a single passing test"), kept boring and assertive.
 
+### Progress — 2026-05-10 — wire-dosbox-engine §2 + §6: ExApp deploys via HaRP, routes registered, last-mile proxy config still needed
+
+Continued the HaRP-based level-3 verifier work. The deploy pipeline
+now lands an ExApp container end-to-end. The remaining gap before
+the AppAPI proxy URL is fully functional is one Apache config
+tweak inside the NC container.
+
+#### §2 GHCR image-pull validation — done (via local registry)
+
+`scripts/local-nextcloud-stack.yml` adds a `registry:2` service on
+`127.0.0.1:5000`. The bootstrap pushes the host image there and
+overrides `info.xml`'s `<registry>`/`<image>` fields in-flight so
+HaRP pulls from the local registry instead of GHCR. Validated:
+
+- Image push: registry log shows the manifest landing.
+- HaRP-driven pull: `POST /v2/.../images/create` succeeds 200.
+- `~/.config/containers/registries.conf` gets one insecure entry
+  for `127.0.0.1:5000` (rootless podman won't pull HTTP otherwise).
+
+This proves the full App Store distribution path (registry → HaRP
+→ container) works. Real CI will use GHCR instead of the local
+registry; the only difference is the config entry.
+
+#### §6 host shim accepts assigned port, declares routes via info.xml
+
+- `host/Dockerfile` — `CMD` is now `sh -c "exec uvicorn ... --port
+  ${APP_PORT:-8080}"`. AppAPI/HaRP assigns the port (~23000) via
+  env; the shim binds there instead of hardcoded 8080. HEALTHCHECK
+  updated to read `APP_PORT` from env too. The shim deliberately
+  binds `0.0.0.0`, not the `APP_HOST=127.0.0.1` AppAPI injects —
+  the canonical AppAPI ExApp pattern would run frpc inside the
+  container to reverse-tunnel from 127.0.0.1; we don't ship frpc,
+  so 0.0.0.0 lets NC reach the container directly via the compose
+  network IP. Documented inline.
+- `host/src/ash_nazg/appapi.py` — simplified back to just the
+  env-reading config object. The HMAC handshake code I started
+  writing was discarded: AppAPI's source shows the
+  AUTHORIZATION-APP-API header is plain `base64(user_id:secret)`
+  (no HMAC), and **routes are declared statically in info.xml**,
+  not registered at runtime via an HTTP call. Less code to ship.
+- `appinfo/info.xml` — added `<routes>` block with 6 routes
+  (`/heartbeat`, `/health`, `/selftest`, `/run`, `/admin/settings`,
+  `/static/*`) and PUBLIC/USER/ADMIN access levels. AppAPI reads
+  these at `app_api:app:register` time and populates
+  `oc_ex_apps_routes`. Verified: `routes: 6` in DB after register.
+
+#### Validated end-to-end
+
+- Local image pushed to registry → HaRP pulls → container spawned.
+- Container `nc_app_ash_nazg Up` and bound on `0.0.0.0:23000`.
+- NC reaches the container directly: `curl
+  http://nc_app_ash_nazg:23000/health` returns the canonical
+  `{"status":"ok","app":"ash_nazg",…}`.
+- Routes table populated, AppAPI's `getExApp` returns
+  `"enabled": true`.
+
+#### What still doesn't work — and why
+
+The AppAPI proxy URL
+`http://localhost:8088/index.php/apps/app_api/proxy/ash_nazg/health`
+returns 404 because of a routing gap inside the NC container.
+
+For HaRP-mode daemons AppAPI builds the ExApp URL as
+`<nextcloud_url>/exapps/<appid>/<path>` (see
+`apps/app_api/lib/DeployActions/DockerActions.php::resolveExAppUrl`).
+That URL pattern requires the NC container's apache to reverse-
+proxy `/exapps/*` → HaRP `:8780`. NC's default image doesn't ship
+that rule.
+
+I added `scripts/nextcloud-conf/exapps-proxy.conf` (mounted into
+`/etc/apache2/conf-enabled/`) with a `<Location "/exapps/">` +
+`ProxyPass` directive. It loads but doesn't take effect because
+NC's `.htaccess` cascade of `RewriteRule`s catches the URL first
+and routes everything to `index.php`. Editing `.htaccess` to add a
+single `RewriteCond %{REQUEST_URI} !^/exapps/` only guards the
+next rule, not all of them — more surgical patching is needed.
+
+#### Two paths to close the last 5 %
+
+1. **Put a real reverse proxy in front of NC** (Traefik, Caddy,
+   nginx). The proxy routes `/exapps/*` → HaRP and everything else
+   → NC. This is what production deployments do; level-3 mirrors
+   prod. The next session's recommended path.
+2. **Patch every `RewriteRule` in `.htaccess`** with the exclusion
+   condition. Fragile (rewritten on every NC upgrade) but keeps
+   the stack to four services.
+
+The wire-dosbox-engine §1 design.md decision (option (c) — HaRP
+for both prod and level-3) is reaffirmed: this last-mile config
+gap is purely environmental, the AppAPI architecture is doing
+exactly what it's documented to do.
+
+#### Files touched
+
+- `host/Dockerfile` — env-driven port binding
+- `host/src/ash_nazg/appapi.py` — simplified config-only module
+- `appinfo/info.xml` — `<routes>` allowlist
+- `scripts/local-nextcloud-stack.yml` — registry + harp services,
+  socket workarounds, `/etc/apache2/conf-enabled/exapps-proxy.conf`
+  bind-mount
+- `scripts/bootstrap-nextcloud.sh` — push to registry + info.xml
+  patch + correct compose-network name
+- `scripts/nextcloud-conf/exapps-proxy.conf` — Location-scoped
+  reverse-proxy rule for `/exapps/*` (loads, doesn't take effect
+  yet; documented for next session)
+
+`~/.config/containers/registries.conf` was also written (one
+`[[registry]] location = "127.0.0.1:5000" insecure = true` block)
+— this is a local podman config, not a repo artefact.
+
 ### Archived — 2026-05-10 — `init-mvp-runtime` archived; 35 spec deltas merged
 
 `openspec archive init-mvp-runtime -y` ran clean. Six new spec

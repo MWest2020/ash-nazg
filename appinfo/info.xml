@@ -123,6 +123,46 @@ losse packages toegevoegd.
         <port>8080</port>
         <system>false</system>
         <translations-folder>/app/l10n</translations-folder>
+        <!--
+            Proxy route allowlist. AppAPI's
+            /index.php/apps/app_api/proxy/<appid>/<path> URL only
+            forwards paths matching one of these routes. Anything not
+            listed here returns 404 from the proxy regardless of
+            whether the ExApp implements it.
+            access_level values: PUBLIC (no auth), USER, ADMIN.
+        -->
+        <routes>
+            <route>
+                <url>^/?heartbeat$</url>
+                <verb>GET</verb>
+                <access_level>PUBLIC</access_level>
+            </route>
+            <route>
+                <url>^/?health$</url>
+                <verb>GET</verb>
+                <access_level>PUBLIC</access_level>
+            </route>
+            <route>
+                <url>^/?selftest$</url>
+                <verb>POST</verb>
+                <access_level>ADMIN</access_level>
+            </route>
+            <route>
+                <url>^/?run$</url>
+                <verb>POST</verb>
+                <access_level>ADMIN</access_level>
+            </route>
+            <route>
+                <url>^/?admin/settings/?$</url>
+                <verb>GET</verb>
+                <access_level>ADMIN</access_level>
+            </route>
+            <route>
+                <url>^/?static/.*</url>
+                <verb>GET</verb>
+                <access_level>USER</access_level>
+            </route>
+        </routes>
     </external-app>
 
 </info>

@@ -48,6 +48,23 @@ services:
       timeout: 3s
       retries: 12
 
+  # Local Docker registry — stands in for GHCR in level-3 testing
+  # so the full pull-via-AppAPI flow can be exercised without
+  # publishing to a public registry. The bootstrap pushes the host
+  # image here as `registry:5000/ash-nazg-host:<tag>` and info.xml
+  # is overridden via runtime push to match.
+  registry:
+    image: docker.io/library/registry:2
+    networks: [ash-nazg-net]
+    ports:
+      - "127.0.0.1:5000:5000"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:5000/v2/"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
   valkey:
     image: docker.io/valkey/valkey:8-alpine
     command: ["valkey-server", "--save", "", "--appendonly", "no"]
@@ -84,6 +101,11 @@ services:
         condition: service_healthy
     volumes:
       - nextcloud-data:/var/www/html
+      # AppAPI 5.x + HaRP/docker-install requires that requests to
+      # <nextcloud_url>/exapps/* be reverse-proxied to HaRP:8780.
+      # NC's image doesn't ship this rule by default; we drop it
+      # into conf-enabled so it loads at Apache startup.
+      - ./nextcloud-conf/exapps-proxy.conf:/etc/apache2/conf-enabled/exapps-proxy.conf:ro
     networks: [ash-nazg-net]
     restart: unless-stopped
     healthcheck:
