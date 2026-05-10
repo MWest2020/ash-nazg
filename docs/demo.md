@@ -1,5 +1,13 @@
 # Demo — what's runnable today
 
+> **Use `127.0.0.1`, not `localhost`.** Many distros'
+> `/etc/hosts` map `localhost` to both `127.0.0.1` and `::1`.
+> Most browsers/curl try IPv6 first; the engine container's
+> port publish is IPv4-only in some podman configs and the
+> connection times out / TLS handshake fails. `127.0.0.1`
+> always works.
+
+
 This is the honest version of the demo. Three things you can
 actually do; two things that work but need one more wiring step;
 the rest is documented in tasks.md.
@@ -27,8 +35,8 @@ docker run -d --name engine-demo \
 sleep 12
 
 # Browser
-xdg-open 'https://localhost:16901/vnc.html' 2>/dev/null \
-    || echo 'Browse to https://localhost:16901/vnc.html'
+xdg-open 'https://127.0.0.1:16901/vnc.html' 2>/dev/null \
+    || echo 'Browse to https://127.0.0.1:16901/vnc.html'
 ```
 
 - Accept the self-signed cert
@@ -78,7 +86,7 @@ What you can now visit:
 |---|---|---|
 | `http://localhost:8088` | Nextcloud login | admin / admin-local-dev |
 | `http://localhost:8088/index.php/settings/apps` | Apps list — Ash Nazg shown as installed | admin |
-| `https://localhost:16901/vnc.html` | DOSBox-X DOS prompt | demo / ash_nazg |
+| `https://127.0.0.1:16901/vnc.html` | DOSBox-X DOS prompt | demo / ash_nazg |
 
 Tear down: `docker compose -f scripts/local-nextcloud-stack.yml down -v`.
 
@@ -95,13 +103,13 @@ Tear down: `docker compose -f scripts/local-nextcloud-stack.yml down -v`.
 4. **DOSBox-X engine container** runs (KasmVNC + Xvnc + dosbox-x);
    the noVNC web client serves on port 8444 inside / 16901
    outside.
-5. **Browser sees DOSBox-X** at `https://localhost:16901/vnc.html`.
+5. **Browser sees DOSBox-X** at `https://127.0.0.1:16901/vnc.html`.
 
 ## What works "almost" — one wiring step short
 
 1. **Right-click → Run with Ash Nazg in Files.** The
    `frontend/src/files-action.ts` bundle is built and would open
-   `https://localhost:16901/vnc.html` in a new tab when its
+   `https://127.0.0.1:16901/vnc.html` in a new tab when its
    `exec` runs. But NC doesn't automatically load
    `host/static/js/files-action-*.js` into the Files-app HTML —
    that needs an entry in `info.xml` under

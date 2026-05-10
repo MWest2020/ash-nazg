@@ -183,10 +183,13 @@ services:
   engine-dosbox:
     image: localhost/ash-nazg-dosbox-x:demo
     # KasmVNC's web client listens on 8444 inside the container.
-    # Published as 16901 on the host so the demo URL is
-    # https://localhost:16901/vnc.html.
+    # Publish on both IPv4 and IPv6 so `localhost` (which resolves
+    # to ::1 first on most distros' hosts files) works as well as
+    # `127.0.0.1`. Without the IPv6 binding the user gets a
+    # TLS-handshake error trying https://localhost:16901/.
     ports:
-      - "16901:8444"
+      - "0.0.0.0:16901:8444"
+      - "[::]:16901:8444"
     networks: [ash-nazg-net]
     # SELinux + rootless podman — same workaround as the other
     # services in this stack.
