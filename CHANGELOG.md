@@ -57,6 +57,84 @@ the Ash Nazg ExApp.
   three scaffold endpoints. Slightly more than the spec asked for
   ("a single passing test"), kept boring and assertive.
 
+### Added — 2026-05-10 — Visible DOSBox-X-in-browser demo working
+
+The engine container now runs end-to-end and you can see DOSBox-X
+in your browser. Standalone (not yet wired through NC) but **the
+hard parts of the visual layer are done**.
+
+#### Demo command
+
+```bash
+docker build -t ash-nazg-dosbox-x:demo -f engines/dosbox-x/Dockerfile engines/dosbox-x/
+docker run -d --security-opt label=disable -p 16901:8444 ash-nazg-dosbox-x:demo
+# Browse to https://localhost:16901/vnc.html
+# Login: demo / ash_nazg
+# See DOSBox-X DOS prompt
+```
+
+Full walkthrough + "what's not in this demo yet" caveats in
+`docs/demo.md`.
+
+#### What landed in the engine image
+
+- `engines/dosbox-x/entrypoint.sh` rewritten from "no-op stub" to
+  a real KasmVNC launcher:
+    - Generates `~/.vnc/xstartup` that `exec`s `dosbox-x` with
+      `${FILE_PATH}` (when set) or the bare prompt otherwise.
+    - Writes a minimal `~/.vnc/kasmvnc.yaml` (no SSL requirement,
+      1280×800, listen on 0.0.0.0).
+    - `exec kasmvncserver :1 -geometry 1280x800 -depth 24 -SecurityTypes None -xstartup ~/.vnc/xstartup -fg`.
+- `engines/dosbox-x/Dockerfile` adds two build-time fixes:
+    - Pre-creates `~/.kasmpasswd` with the `demo`/`ash_nazg`
+      account (skipping the first-run wizard that would deadlock
+      without a TTY).
+    - Generates a self-signed TLS cert at
+      `/etc/ssl/private/ssl-cert-snakeoil.key` (kasmvncserver
+      loads it at startup even when `require_ssl: false`).
+- `docs/demo.md` — full walkthrough: build command, browser flow,
+  what you see, how to run a real DOS program by mounting the
+  file in.
+
+#### What this proves
+
+- The engine container architecture is correct end-to-end.
+- KasmVNC's noVNC-style web client renders DOSBox-X in any modern
+  browser. No browser plugins, no extra clients.
+- The image that ships to GHCR for the App Store distribution is
+  the same image driving this demo.
+
+#### Discoveries that turned into code
+
+- KasmVNC's first-run wizard prompts twice (user-write, then DE)
+  on TTY-less containers. Both bypassed by pre-creating
+  `~/.kasmpasswd` (with a `demo` user via `kasmvncpasswd -u demo
+  -wo`) and touching `~/.vnc/.de-was-selected`.
+- `kasmvncpasswd` reads the password from stdin **three** times
+  (set + verify + a trailing newline). Two newlines → "Passwords
+  don't match"; three works.
+- KasmVNC loads `/etc/ssl/private/ssl-cert-snakeoil.key` at
+  startup regardless of `ssl.require_ssl`. Solution: generate
+  the cert at build time, `chmod 755 /etc/ssl/private` so the
+  non-root `app` user can read.
+- KasmVNC's actual web port is **8444**, not the 6901 referenced
+  in older docs (and in the early scaffold of this project).
+  Updated everywhere the demo flow touches.
+
+#### What this demo DOESN'T yet do
+
+- File-upload-to-Nextcloud → right-click → Run flow. The
+  Nextcloud side reaches the host shim's HTTP endpoints; the
+  host shim's `/run` dispatcher that asks HaRP to spawn an
+  engine container is still §5 (not started).
+- AppAPI websocket-proxy routing of KasmVNC traffic through
+  NC's chrome. That's the `streaming-proxy` change.
+- WebDAV mount of user Files inside the engine container. The
+  current demo loads `FILE_PATH` from a bind-mount.
+
+All three remain on the wire-dosbox-engine task list. The visible
+demo is the foundation they integrate against.
+
 ### Progress — 2026-05-10 — Caddy reverse-proxy in front of NC; /exapps routing works; AppAPI proxy URL still 404 (post-auth issue)
 
 Closed the routing gap from the previous commit with a Caddy

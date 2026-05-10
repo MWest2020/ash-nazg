@@ -79,6 +79,31 @@ RUN userdel -r ubuntu 2>/dev/null || true \
 COPY entrypoint.sh /usr/local/bin/ash-nazg-entrypoint
 RUN chmod +x /usr/local/bin/ash-nazg-entrypoint
 
+# Pre-create a KasmVNC password file at the path the default
+# kasmvnc.yaml expects (~/.kasmpasswd). Without this the
+# kasmvncserver first-run wizard prompts interactively for user
+# creation, which deadlocks under docker run.
+USER app
+RUN mkdir -p /home/app/.vnc /home/app/.local/share \
+    && printf 'ash_nazg\nash_nazg\n\n' \
+        | kasmvncpasswd -u demo -wo /home/app/.kasmpasswd \
+    && touch /home/app/.vnc/.de-was-selected
+USER root
+
+# KasmVNC requires a TLS key/cert even when SSL is disabled in the
+# config (it tries to load the snakeoil cert at startup). Generate
+# a self-signed pair, then make /etc/ssl/private readable so the
+# non-root `app` user can load the key. DEMO-MODE only.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends openssl \
+    && openssl req -x509 -newkey rsa:2048 -nodes -days 365 \
+        -keyout /etc/ssl/private/ssl-cert-snakeoil.key \
+        -out /etc/ssl/certs/ssl-cert-snakeoil.pem \
+        -subj '/CN=ash-nazg-local-dev' \
+    && chmod 755 /etc/ssl/private \
+    && chmod 644 /etc/ssl/private/ssl-cert-snakeoil.key \
+    && rm -rf /var/lib/apt/lists/*
+
 # Mount point the host expects (per engines spec; see SessionConfig.mount_path).
 RUN mkdir -p /mnt/files && chown app:app /mnt/files
 
