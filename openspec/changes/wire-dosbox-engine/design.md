@@ -112,30 +112,49 @@ For `manual-install`, the operator runs the container, so steps
   Requires bringing up HaRP daemon + docker socket, but eliminates
   the port-juggling entirely.
 
-### Decision (deferred to wire-dosbox-engine implementation)
+### Decision: (c) — docker-install via HaRP, for both production and level-3
 
-This is a genuine wire-dosbox-engine architectural choice that
-should not be resolved at proposal-time. Three options are on the
-table and each has real costs:
+Three options were on the table:
 
-- **(a)** is operationally honest but breaks the
-  one-`docker-compose-up` invariant we wanted for level-3.
-- **(b)** keeps level-3 simple but adds a moving part inside the
-  host image (a port-shim) just to work around an AppAPI default.
-- **(c)** is what the App Store will actually use, but the level-3
-  verifier becomes much heavier (HaRP + docker socket + FRP).
+- **(a)** Two-pass manual-install deploy.
+- **(b)** In-container port-shim.
+- **(c)** docker-install via HaRP.
 
-Recommendation going into the implementation session: **(c) for
-production, (a) or (b) for level-3** — i.e., the App Store
-distribution uses HaRP/docker-install, and the level-3 verifier
-captures whichever manual-install path is least friction. Pick one
-on day-one of wire-dosbox-engine implementation.
+Decision: **(c) for both paths**. Rationale:
 
-This finding retires part of the proposal's "the host shim
-advertises its listen port" framing — it's not advertising a
-chosen port, it's accepting an assigned one. The acceptance
-criterion stays the same in spirit ("no DB UPDATE workaround in
-the bootstrap"), but the mechanism shifts.
+- **One install model is cheaper than two.** Maintaining
+  manual-install "just for level-3" creates a dialect that
+  drifts from production. The pain of "works in prod, fails in
+  level-3" or vice-versa six months in is larger than the
+  upfront cost of running HaRP locally.
+- **Manual-install is second-rate in AppAPI 5.x.** AppAPI's own
+  CLI examples list manual-install last, with `host: null` and
+  caveats. The contributors clearly treat docker-install as the
+  primary path. We follow the upstream's centre of gravity.
+- **The "refactor bomb" risk dominates.** Building wiring code
+  on top of a manual-install handshake assumption that we'd
+  later have to rework for App Store submission is precisely
+  the kind of mid-flight architectural rework spec-driven
+  development is meant to prevent.
+
+What this means concretely for `wire-dosbox-engine`:
+
+- The level-3 verifier's compose stack adds an `appapi-harp`
+  service. The ash-nazg-host service is no longer started by
+  compose — HaRP spawns it via the docker socket on `app:register`.
+- The host shim's `appapi.register()` reads `APP_PORT`,
+  `APP_SECRET`, `APP_VERSION`, `APP_ID`, `NEXTCLOUD_URL` from env
+  vars that **HaRP sets when it spawns the container** (per the
+  AppAPI 5.x docker-install convention) and accepts those values
+  rather than choosing them.
+- Routes are POSTed to AppAPI by the ExApp at startup as the
+  second part of the handshake (this part of the original design
+  is unchanged — it's the route registration that's still the
+  ExApp's responsibility, not the port).
+
+The acceptance criterion *"no DB UPDATE workaround in the
+bootstrap"* stays — and now there's no bootstrap-driven port
+patching at all, because HaRP handles port allocation directly.
 
 ## AppAPI registration handshake (AppAPI 5.x)
 

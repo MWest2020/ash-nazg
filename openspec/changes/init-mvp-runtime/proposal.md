@@ -60,6 +60,73 @@ After this change merges, the next change (`wire-dosbox-engine`) connects
 the pieces so the demo flow actually works end-to-end. This change just
 makes the scaffolding so subsequent changes have a place to land.
 
+## Discoveries during scaffolding
+
+The scaffolding work surfaced findings that materially shape the
+follow-on changes. Recording them here so future readers
+understand the architectural state at archive time.
+
+### AppAPI 5.x flipped the handshake direction
+
+The level-3 verifier (`scripts/verify-against-nextcloud.sh`) was
+first written against `nextcloud:30-apache` (AppAPI 4.0.6) and
+green'd. Migrating it to `nextcloud:32-apache` (AppAPI 5.x)
+during the test-target evaluation for `wire-dosbox-engine`
+revealed that the assumption *"the ExApp advertises its listen
+port to AppAPI"* is wrong for AppAPI 5.x.
+
+In 5.x **manual-install** mode AppAPI **always auto-allocates**
+the ExApp port (~23000) and synchronously heartbeats the ExApp
+at that address. The ExApp must accept the assigned port; no
+flag, env var, or info.xml field overrides this.
+
+Verified with both `host: ash-nazg-host` and the AppAPI-canonical
+`host: null` daemon variants. Same outcome:
+`oc_ex_apps.port = 23000`, "Heartbeat check failed".
+
+### Manual-install becomes second-rate; level-3 must move to HaRP
+
+The implication for v1 architecture:
+
+- **For production** (App Store distribution): the canonical path
+  is **docker-install via HaRP**. AppAPI spawns the ExApp
+  container itself with the right env vars, so port allocation
+  and heartbeat happen in lockstep. There's no chicken-and-egg.
+- **For level-3 verification**: must also move to HaRP.
+  Maintaining a manual-install path "just for testing" creates
+  two install models that drift; the pain of debugging "works in
+  prod, fails in level-3" later is bigger than the upfront cost
+  of running HaRP locally.
+
+The level-3 verifier shipped in this scaffold change uses
+manual-install with a SQL-UPDATE workaround on
+`oc_ex_apps.port` to keep the smoke test viable. That workaround
+is documented inline, in the bootstrap script, in
+`docs/testing.md`, and as an explicit retirement criterion in
+`wire-dosbox-engine/proposal.md`. It exists for **exactly one
+release**: this scaffolding change. The next change replaces
+both the production install path and the level-3 verifier with
+HaRP-based docker-install — and deletes the SQL UPDATE.
+
+### Why this finding belongs here, not in wire-dosbox-engine alone
+
+Two reasons:
+
+1. The scaffolding change ships an artefact (the level-3
+   verifier with its SQL workaround) that future readers will
+   look at and ask "why is this here?". The honest answer lives
+   in this Discoveries section.
+2. Better that the architectural correction surfaces at
+   spec-time — before `wire-dosbox-engine` writes any wiring
+   code — than six months in, when reverting an "advertise port"
+   handshake would be a refactor bomb. This is the
+   spec-driven-development gain working as intended.
+
+`wire-dosbox-engine` task §4.0 (Day-one architectural decision)
+locks in **option (c) — docker-install via HaRP for both
+production and level-3**, with the rationale captured in that
+change's design.md.
+
 ## Impact
 
 **Affected systems:** none (greenfield).

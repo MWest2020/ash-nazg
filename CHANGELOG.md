@@ -57,6 +57,85 @@ the Ash Nazg ExApp.
   three scaffold endpoints. Slightly more than the spec asked for
   ("a single passing test"), kept boring and assertive.
 
+### Decided — 2026-05-09 — wire-dosbox-engine §4.0: option (c) — HaRP/docker-install for both prod and level-3
+
+Following yesterday's AppAPI 5.x manual-install discovery, the
+day-one architectural decision parked at `wire-dosbox-engine`
+task §4.0 is resolved: **(c) docker-install via HaRP, for both
+production and level-3 verification**.
+
+#### Rationale
+
+- **One install model is cheaper than two.** Manual-install
+  "just for level-3" creates a dialect that drifts from
+  production. Six months in, "works in prod, fails in level-3"
+  (or vice versa) is more painful than running HaRP locally.
+- **Manual-install is second-rate in AppAPI 5.x.** Upstream's
+  own CLI examples list it last with caveats; contributors
+  treat docker-install as the primary path. We follow the
+  centre of gravity.
+- **Refactor-bomb risk dominates.** Building wiring code on top
+  of a manual-install handshake assumption that App Store
+  submission would later force us to rework is precisely the
+  mid-flight architectural rework spec-driven development is
+  meant to prevent.
+
+#### Changes to `wire-dosbox-engine`
+
+- `design.md` § *Decision: (c) — docker-install via HaRP*
+  replaces the earlier "Decision deferred" framing. Documents
+  what HaRP-based deployment means for the host shim
+  (`appapi.register()` reads env vars HaRP sets when spawning,
+  rather than choosing them).
+- `tasks.md` reordered. The first two sections are now
+  **foundations** that have to land before any engine wiring:
+    - **§1 HaRP-based level-3 verifier rewrite** — drop the
+      manual-install daemon, add an `appapi-harp` service, stop
+      starting `ash-nazg-host` from compose (HaRP spawns it),
+      delete the `oc_ex_apps.port` SQL workaround, add a
+      positive proxy-URL assertion that flips the "404 by
+      design" caveat into a passing test.
+    - **§2 GHCR image-pull validation** — push host + engine
+      images to GHCR under a development tag, point info.xml at
+      it, re-run the verifier so HaRP pulls from the registry
+      (validates the App Store distribution path before any
+      dispatcher work goes in on top).
+- Old §1–§4 (engine registry, dosbox-x plugin, dispatcher,
+  AppAPI registration) become §3–§6, unchanged in scope but
+  numbered after the foundations.
+- §6 (the handshake) reframed: with HaRP, AppAPI sets `APP_PORT`
+  / `APP_SECRET` / `APP_VERSION` etc. as env vars on the spawned
+  container. The host shim accepts those values; only **route
+  registration** still flows from ExApp to AppAPI. Port is no
+  longer "advertised" — it's accepted.
+- Total tasks: 39 (was 26). The growth is the verifier-rewrite
+  + GHCR foundation work that was implicit-and-undocumented
+  before.
+
+#### Changes to `init-mvp-runtime`
+
+`proposal.md` gains a **Discoveries during scaffolding** section
+covering:
+
+1. **AppAPI 5.x flipped the handshake direction** — recap of
+   the migration finding.
+2. **Manual-install becomes second-rate; level-3 must move to
+   HaRP** — explains why the SQL UPDATE workaround in the
+   shipped level-3 verifier is "for exactly one release: this
+   one".
+3. **Why this finding belongs here, not in `wire-dosbox-engine`
+   alone** — the scaffold ships an artefact (the verifier with
+   its workaround) that future readers will ask about; the
+   honest answer lives in the change that introduced it.
+
+The Discoveries section is the bridge from scaffold to wiring:
+it frames why the next change starts with a verifier rewrite
+rather than engine code.
+
+`init-mvp-runtime` is now ready to archive — the discovery is
+documented, the workaround is annotated as one-release-only, and
+the follow-on change has the right starting tasks.
+
 ### Discovered — 2026-05-09 — AppAPI 5.x manual-install assigns ports, doesn't accept them
 
 Migrated the level-3 verifier's test target to
