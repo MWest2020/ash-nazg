@@ -78,10 +78,27 @@ services:
       timeout: 3s
       retries: 12
 
-  nextcloud:
-    image: docker.io/library/nextcloud:32-apache
+  # Caddy reverse proxy in front of Nextcloud. Routes /exapps/* to
+  # HaRP (AppAPI 5.x HaRP-mode requires this); everything else to NC.
+  # Without this, AppAPI's heartbeat to <nextcloud_url>/exapps/<id>
+  # hits NC's PHP front-controller and returns 404, the ExApp stays
+  # in "unhealthy" state, and the AppAPI proxy URL 404s.
+  caddy:
+    image: docker.io/library/caddy:2-alpine
     ports:
       - "8088:80"
+    volumes:
+      - ./nextcloud-conf/Caddyfile:/etc/caddy/Caddyfile:ro,z
+    networks: [ash-nazg-net]
+    depends_on:
+      nextcloud:
+        condition: service_healthy
+      appapi-harp:
+        condition: service_started
+    restart: unless-stopped
+
+  nextcloud:
+    image: docker.io/library/nextcloud:32-apache
     environment:
       POSTGRES_HOST: postgres
       POSTGRES_DB: nextcloud
@@ -101,11 +118,8 @@ services:
         condition: service_healthy
     volumes:
       - nextcloud-data:/var/www/html
-      # AppAPI 5.x + HaRP/docker-install requires that requests to
-      # <nextcloud_url>/exapps/* be reverse-proxied to HaRP:8780.
-      # NC's image doesn't ship this rule by default; we drop it
-      # into conf-enabled so it loads at Apache startup.
-      - ./nextcloud-conf/exapps-proxy.conf:/etc/apache2/conf-enabled/exapps-proxy.conf:ro
+    # NC no longer publishes a port — Caddy is the external entry
+    # point. Internal-only on the compose network.
     networks: [ash-nazg-net]
     restart: unless-stopped
     healthcheck:

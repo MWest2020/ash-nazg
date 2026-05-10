@@ -57,6 +57,77 @@ the Ash Nazg ExApp.
   three scaffold endpoints. Slightly more than the spec asked for
   ("a single passing test"), kept boring and assertive.
 
+### Progress — 2026-05-10 — Caddy reverse-proxy in front of NC; /exapps routing works; AppAPI proxy URL still 404 (post-auth issue)
+
+Closed the routing gap from the previous commit with a Caddy
+reverse-proxy in front of NC. The `/exapps/*` URLs now correctly
+reach HaRP. The remaining 404 on the AppAPI proxy URL appears to
+be a separate authentication issue downstream of routing — basic
+auth on `/index.php/apps/app_api/proxy/...` lands on NC's login
+page (response shows `body-login` ID + empty `data-requesttoken`)
+even though the same basic-auth credentials work fine for OCS
+endpoints. Needs fresh investigation.
+
+#### What landed
+
+- `scripts/nextcloud-conf/Caddyfile` — `:80` listener with
+  `handle /exapps/*` → `appapi-harp:8780` and `handle` → `nextcloud:80`.
+- `scripts/local-nextcloud-stack.yml`:
+    - `caddy:2-alpine` service publishes `0.0.0.0:8088`.
+    - `nextcloud` service no longer publishes a host port — it's
+      internal-only on the compose network now.
+    - The earlier `exapps-proxy.conf` bind-mount into NC's Apache
+      is removed (kept on disk for the alternative-approach
+      documentation but no longer attached).
+    - SELinux `:z` label on the Caddyfile mount — same fix as for
+      the docker socket; Caddy in the container can't read a
+      bind-mounted config on Enforcing systems without it.
+
+#### Verified
+
+- `curl http://localhost:8088/status.php` → 200 (NC via Caddy).
+- `curl http://localhost:8088/exapps/foo/heartbeat` → 404 with
+  body `"404 Not Found"` (HaRP-style short response, **not** NC's
+  HTML page). Confirms `/exapps/*` traffic reaches HaRP.
+- The ExApp container deploys, `oc_ex_apps_routes` populated with
+  6 rows, `enabled=1` after `app_api:app:enable`, `heartbeat_count`
+  growing with `error=""` (heartbeats now succeed).
+
+#### What still doesn't work
+
+`curl -u admin:admin-local-dev …/proxy/ash_nazg/health` returns
+404 with the NC login page HTML. Basic auth on the same NC
+instance works fine for OCS endpoints (`/ocs/v2.php/cloud/users/admin`
+returns 200 + user data). Two hypotheses to investigate next
+session:
+
+1. **Caddy doesn't forward the `Authorization` header.** The
+   default `reverse_proxy` directive should pass headers through,
+   but Caddy 2.x may strip `Authorization` in some configs. A
+   quick `header_up Authorization {http.request.header.Authorization}`
+   in the Caddyfile would prove or disprove this.
+2. **AppAPI's proxy controller requires session auth, not basic
+   auth.** Looking at `ExAppProxyController` annotations earlier
+   I saw `#[NoAdminRequired]` + `#[NoCSRFRequired]` — so it
+   should be reachable without a session — but maybe the
+   user-identity resolution in the proxy path requires a logged-
+   in session for ADMIN-access-level routes. A logged-in browser
+   session (vs. curl basic-auth) might just work.
+
+Either hypothesis is testable in five minutes from a fresh
+session. Real demo (visible DOSBox-X output) is still farther
+out — needs the `/run` dispatcher, the engine entrypoint that
+actually launches dosbox-x with a user-supplied binary, and
+KasmVNC streaming. Multiple sessions of work.
+
+#### Files
+
+- `scripts/nextcloud-conf/Caddyfile` (new)
+- `scripts/local-nextcloud-stack.yml` (Caddy service + NC port
+  removed)
+- `scripts/nextcloud-conf/exapps-proxy.conf` (untouched but no
+  longer attached — kept as documented-alternative)
+
 ### Progress — 2026-05-10 — wire-dosbox-engine §2 + §6: ExApp deploys via HaRP, routes registered, last-mile proxy config still needed
 
 Continued the HaRP-based level-3 verifier work. The deploy pipeline

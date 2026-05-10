@@ -1,0 +1,33 @@
+# Caddyfile — reverse proxy in front of Nextcloud.
+#
+# wire-dosbox-engine §1 last-mile: AppAPI's HaRP-mode deploy builds
+# ExApp URLs as <nextcloud_url>/exapps/<appid>/<path>. Those need
+# to reach HaRP's HTTP frontend on :8780, not NC's PHP app. NC's
+# stock image doesn't do this routing; patching its .htaccess is
+# fragile (rewritten on upgrade). A real reverse proxy in front
+# does the job once and matches what production deployments use.
+#
+# Routing:
+#   /exapps/*  → appapi-harp:8780  (HaRP, ExApp HTTP traffic)
+#   anything else → nextcloud:80   (regular NC)
+
+:80 {
+    # Send /exapps/* to HaRP first — pattern matching wins by
+    # specificity over the catch-all `reverse_proxy nextcloud:80`
+    # below.
+    handle /exapps/* {
+        reverse_proxy appapi-harp:8780 {
+            # Keep the original Host header — HaRP doesn't seem to
+            # need it but it makes logs less confusing.
+            header_up Host {host}
+        }
+    }
+
+    # Everything else: Nextcloud.
+    handle {
+        reverse_proxy nextcloud:80
+    }
+
+    # Logging stays light — uncomment to debug.
+    # log { output stderr }
+}
