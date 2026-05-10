@@ -176,6 +176,23 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
+  # Demo-mode DOSBox-X engine. In the full design the host shim
+  # asks HaRP to spawn an engine container per-Run; for the MVP
+  # demo we run a single always-on engine and the frontend file
+  # action opens its KasmVNC URL in a new browser tab.
+  engine-dosbox:
+    image: localhost/ash-nazg-dosbox-x:demo
+    # KasmVNC's web client listens on 8444 inside the container.
+    # Published as 16901 on the host so the demo URL is
+    # https://localhost:16901/vnc.html.
+    ports:
+      - "16901:8444"
+    networks: [ash-nazg-net]
+    # SELinux + rootless podman — same workaround as the other
+    # services in this stack.
+    security_opt: ["label=disable"]
+    restart: unless-stopped
+
 networks:
   ash-nazg-net:
     driver: bridge

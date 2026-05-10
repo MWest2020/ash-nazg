@@ -1,81 +1,44 @@
-# Demo — DOSBox-X running in a browser
+# Demo — what's runnable today
 
-> **Status: standalone visual demo.** Proves the engine container
-> works end-to-end. Full Nextcloud-integrated flow (right-click a
-> file in Files → see DOSBox-X) is still in progress; this is the
-> "see DOSBox-X in a browser tab" milestone.
+This is the honest version of the demo. Three things you can
+actually do; two things that work but need one more wiring step;
+the rest is documented in tasks.md.
 
-## What you'll see
+## The hardest part is already done
 
-1. A DOSBox-X DOS prompt rendered in your browser
-2. Real keyboard input — type `dir`, run programs
-3. ~1280×800 desktop area inside the noVNC-style client
+A DOSBox-X DOS prompt rendered in your browser. Real keyboard
+input. ~1280×800 desktop area inside KasmVNC's noVNC-style
+client. It's running in a Linux container; KasmVNC serves the
+JS client, the X server runs Xvnc, DOSBox-X is an X client.
+That's the "engine" tier of the architecture, in full.
 
-## Run it
+## Run the standalone engine demo (no Nextcloud needed)
 
 ```bash
-# Build the engine image (~5 min; downloads KasmVNC, dosbox-x)
 docker build -t ash-nazg-dosbox-x:demo \
     -f engines/dosbox-x/Dockerfile engines/dosbox-x/
 
-# Run with the KasmVNC web-client port exposed
-docker run -d --name ash-nazg-engine-demo \
+docker run -d --name engine-demo \
     --security-opt label=disable \
     -p 16901:8444 \
     ash-nazg-dosbox-x:demo
 
-# Wait ~12 s for KasmVNC to bind
+# Wait 12 s
 sleep 12
 
-# Open the browser
+# Browser
 xdg-open 'https://localhost:16901/vnc.html' 2>/dev/null \
     || echo 'Browse to https://localhost:16901/vnc.html'
 ```
 
-The browser will warn about the self-signed certificate — accept
-it (local dev only). On the KasmVNC login page:
+- Accept the self-signed cert
+- Login: **demo** / **ash_nazg**
+- Click *Connect*. DOSBox-X DOS prompt appears.
 
-- **Username:** `demo`
-- **Password:** `ash_nazg`
-
-Click *Connect*. After a couple of seconds the DOSBox-X welcome
-screen + DOS prompt appears.
-
-## Stop
+To run a real DOS binary, mount it and set `FILE_PATH`:
 
 ```bash
-docker rm -f ash-nazg-engine-demo
-```
-
-## What you're seeing under the hood
-
-```
-[browser] ──HTTPS:16901──▶ [engine container]
-                              ├─ KasmVNC (port 8444 internal)
-                              │     └─ serves vnc.html, noVNC client, websocket
-                              └─ Xvnc :1 ──▶ xstartup ──▶ dosbox-x
-```
-
-- **KasmVNC** is the VNC server with a built-in noVNC web client.
-  No browser plugin needed — the JS in vnc.html does the work.
-- **Xvnc** is the X server KasmVNC drives. DOSBox-X runs as an X
-  client inside it.
-- **DOSBox-X** is invoked from `~/.vnc/xstartup`. If `FILE_PATH`
-  is set as an env var on `docker run` (and the path exists in the
-  container), DOSBox-X runs that file. Otherwise the bare DOS
-  prompt appears.
-
-## Running a real program
-
-To run an actual DOS executable, mount it into the container and
-point DOSBox-X at it:
-
-```bash
-# Get a homebrew DOS program (FreeDOS, OpenWatcom, abandonware
-# you have rights to, etc.). For this example pretend you have
-# keen1.exe in your current directory.
-
-docker run -d --name ash-nazg-engine-demo \
+docker run -d --name engine-demo \
     --security-opt label=disable \
     -p 16901:8444 \
     -v "$(pwd)/keen1.exe:/programs/keen1.exe:ro,z" \
@@ -83,41 +46,98 @@ docker run -d --name ash-nazg-engine-demo \
     ash-nazg-dosbox-x:demo
 ```
 
-DOSBox-X loads the binary and (depending on the binary) runs it
-straight away.
+Stop: `docker rm -f engine-demo`.
 
-## Why this isn't yet the full demo
+## Run the full stack (Nextcloud + ExApp + engine)
 
-The fully-wired flow has more pieces:
+```bash
+# Workarounds for rootless podman; no-ops on Docker rootful
+chmod 0666 /run/user/$(id -u)/podman/podman.sock
+# (one-time per host) allow insecure local registry
+mkdir -p ~/.config/containers
+cat > ~/.config/containers/registries.conf <<'EOF'
+[[registry]]
+location = "127.0.0.1:5000"
+insecure = true
+EOF
 
-1. **Upload to Nextcloud Files** — works (NC is up at
-   localhost:8088 in the full stack).
-2. **Right-click → Run with Ash Nazg** — file action is
-   registered but its `exec` toasts "not yet wired".
-3. **Host dispatcher** — `/run` endpoint that magic-byte-detects
-   the binary and asks HaRP to spawn an engine container with
-   `FILE_PATH` set. **Not yet implemented** (§5 of
-   wire-dosbox-engine).
-4. **Browser shows the running session** — currently you'd need
-   to browse to the spawned container's host-exposed port. The
-   AppAPI websocket proxy (so the iframe inside NC's UI shows
-   the stream) is a future change (`streaming-proxy`).
+docker compose -f scripts/local-nextcloud-stack.yml up -d
+./scripts/bootstrap-nextcloud.sh    # registers ash_nazg as an ExApp
+# enable (the occ enable hangs sometimes; fall back to direct DB)
+docker exec scripts_nextcloud_1 php -r "
+\$p = new PDO('pgsql:host=postgres;dbname=nextcloud','nextcloud','nextcloud-local-dev');
+\$p->exec(\"UPDATE oc_ex_apps SET enabled = 1 WHERE appid = 'ash_nazg'\");
+"
+docker exec scripts_valkey_1 valkey-cli FLUSHDB
+docker compose -f scripts/local-nextcloud-stack.yml restart nextcloud
+```
 
-What this demo proves:
+What you can now visit:
 
-- The engine container (item 4-ish) works in isolation.
-- KasmVNC + DOSBox-X + the entrypoint pipeline are real.
-- The image you'd publish to GHCR for the App Store is the same
-  image driving this demo.
+| URL | What you see | Credentials |
+|---|---|---|
+| `http://localhost:8088` | Nextcloud login | admin / admin-local-dev |
+| `http://localhost:8088/index.php/settings/apps` | Apps list — Ash Nazg shown as installed | admin |
+| `https://localhost:16901/vnc.html` | DOSBox-X DOS prompt | demo / ash_nazg |
 
-Closing the remaining gaps is wire-dosbox-engine §3 / §5 / §8
-work.
+Tear down: `docker compose -f scripts/local-nextcloud-stack.yml down -v`.
+
+## What works today, end-to-end
+
+1. **NC 32 + AppAPI 5.x + HaRP** spins up reproducibly.
+2. **ash_nazg ExApp** registers via `app_api:app:register` with
+   our `info.xml`, gets pulled from the local registry, spawned
+   by HaRP, attached to the compose network, and reports
+   `enabled: True / status.error: ''`.
+3. **`oc_ex_apps_routes`** populated with 6 PUBLIC/USER/ADMIN
+   routes — the AppAPI route-allowlist mechanism works as
+   designed.
+4. **DOSBox-X engine container** runs (KasmVNC + Xvnc + dosbox-x);
+   the noVNC web client serves on port 8444 inside / 16901
+   outside.
+5. **Browser sees DOSBox-X** at `https://localhost:16901/vnc.html`.
+
+## What works "almost" — one wiring step short
+
+1. **Right-click → Run with Ash Nazg in Files.** The
+   `frontend/src/files-action.ts` bundle is built and would open
+   `https://localhost:16901/vnc.html` in a new tab when its
+   `exec` runs. But NC doesn't automatically load
+   `host/static/js/files-action-*.js` into the Files-app HTML —
+   that needs an entry in `info.xml` under
+   `<external-app><scripts>` plus a corresponding row in
+   `oc_ex_ui_files_actions`. **Not yet added.** The next step
+   for the integrated demo is wiring AppAPI's script-injection
+   mechanism (a few lines in `info.xml`).
+
+2. **AppAPI proxy URL.** Visiting
+   `http://localhost:8088/index.php/apps/app_api/proxy/ash_nazg/...`
+   from `curl -u admin:...` still 404s. The path itself is
+   plumbed (NC routes it to AppAPI's proxy controller); the
+   issue is auth — Caddy may be stripping the `Authorization`
+   header, or AppAPI's proxy might require a session cookie
+   instead of basic auth. Browser-based access (with a real
+   logged-in session) hasn't been tested yet. **Probably 30
+   min of debugging away.**
+
+## What's deferred to later changes
+
+- **Per-Run engine spawn via HaRP** (current demo runs one
+  always-on engine). The host shim's `/run` dispatcher that
+  asks HaRP to spawn a fresh engine per session is wire-dosbox-
+  engine §5.
+- **WebDAV mount** of user Files inside the engine container.
+  Currently `FILE_PATH` is a bind-mount or unset. The proper
+  davfs2 mount lands in §7.
+- **AppAPI websocket proxy** so the KasmVNC stream renders in
+  an iframe inside NC's chrome (instead of a new browser tab).
+  That's the `streaming-proxy` change — a separate proposal
+  after `wire-dosbox-engine`.
 
 ## Security note
 
-This demo runs KasmVNC with auth disabled (`-SecurityTypes None`
-plus a permissive yaml) and a self-signed cert at
-`/etc/ssl/private/ssl-cert-snakeoil.key`. **Don't ship this
-configuration.** Production replaces the demo password with
-per-session tokens issued by the host shim and routed through
-AppAPI's HaRP proxy.
+This demo runs KasmVNC with no VNC-protocol auth (`-SecurityTypes
+None`) and a self-signed cert. The HTTP-layer login (demo/
+ash_nazg) is the only gate. **Don't ship this configuration.**
+Production replaces it with per-session tokens issued by the
+host shim and routed through AppAPI's HaRP proxy.

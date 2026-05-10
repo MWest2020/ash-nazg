@@ -86,13 +86,26 @@ const action: IFileAction = {
 		if (!node) {
 			return false
 		}
+
+		// MVP DEMO MODE — opens the always-on DOSBox-X engine
+		// container's KasmVNC web client in a new browser tab.
+		// The host shim's /run dispatcher (real per-session
+		// spawn via HaRP, file mount via WebDAV) lands in a
+		// later iteration of wire-dosbox-engine.
+		const demoUrl = 'https://localhost:16901/vnc.html'
+		emit('ash_nazg:run-requested', { path: node.path })
+
 		showInfo(
 			t(
 				APP_ID,
-				'Ash Nazg dispatcher is not wired yet — coming in the next change.',
+				'Opening DOSBox-X — accept the self-signed cert, then log in (demo / ash_nazg).',
 			),
 		)
-		emit('ash_nazg:run-requested', { path: node.path })
+		// Small delay so the toast is readable before the new tab grabs focus.
+		window.setTimeout(() => {
+			window.open(demoUrl, '_blank', 'noopener,noreferrer')
+		}, 800)
+
 		// `null` signals to the Files app that this action handled its
 		// own UX (no further file-list navigation needed).
 		return null
