@@ -207,7 +207,7 @@ async def test_appapi_client_register_file_action_post_shape() -> None:
 
 
 @pytest.mark.asyncio
-async def test_appapi_client_register_file_action_raises_on_4xx() -> None:
+async def test_appapi_client_register_file_action_raises_after_retries() -> None:
     def _handler(_: httpx.Request) -> httpx.Response:
         return httpx.Response(403, text="forbidden")
 
@@ -215,8 +215,39 @@ async def test_appapi_client_register_file_action_raises_on_4xx() -> None:
     async with httpx.AsyncClient(transport=transport) as http:
         client = AppApiClient(_make_config(), client=http)
         with pytest.raises(RuntimeError, match="403"):
+            # tight retry budget keeps the test fast; the production
+            # call uses retries=30 + 10s delay
             await client.register_file_action(
                 FileActionsMenuEntry(
                     name="x", display_name="x", action_handler="/x"
-                )
+                ),
+                retries=2,
+                retry_delay_s=0.01,
             )
+
+
+@pytest.mark.asyncio
+async def test_appapi_client_register_file_action_retries_then_succeeds() -> None:
+    """First call returns 401 (ExApp not yet enabled), second succeeds."""
+    state = {"calls": 0}
+
+    def _handler(_: httpx.Request) -> httpx.Response:
+        state["calls"] += 1
+        if state["calls"] == 1:
+            return httpx.Response(
+                401,
+                json={"ocs": {"meta": {"statuscode": 997, "message": "auth failed"}}},
+            )
+        return httpx.Response(200, json={"ocs": {"meta": {"status": "ok"}}})
+
+    transport = httpx.MockTransport(_handler)
+    async with httpx.AsyncClient(transport=transport) as http:
+        client = AppApiClient(_make_config(), client=http)
+        await client.register_file_action(
+            FileActionsMenuEntry(
+                name="x", display_name="x", action_handler="/x"
+            ),
+            retries=5,
+            retry_delay_s=0.01,
+        )
+    assert state["calls"] == 2

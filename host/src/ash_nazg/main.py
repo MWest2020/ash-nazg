@@ -20,6 +20,7 @@ live NC, while the level-3 verifier exercises the real path.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 from collections.abc import AsyncIterator
@@ -170,13 +171,21 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     )
 
     if _resolved_mode() == MODE_NEXTCLOUD:
-        await _register_files_action_menu()
+        # Don't block lifespan startup — the AppAPI register call
+        # may need to retry for several minutes until the ExApp is
+        # `enabled` in oc_ex_apps. The server has to start accepting
+        # heartbeats immediately or the bootstrap waits forever.
+        register_task = asyncio.create_task(_register_files_action_menu())
     else:
+        register_task = None
         logger.info(
             "AppAPI env vars absent — skipping FileActionsMenu register (demo bootstrap)"
         )
 
     yield
+    # Cancel the in-flight register task if still retrying.
+    if register_task is not None and not register_task.done():
+        register_task.cancel()
     # Best-effort cleanup of HTTP adapters
     aclose = getattr(reader, "aclose", None)
     if callable(aclose):

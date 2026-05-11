@@ -19,6 +19,7 @@ Reference:
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import logging
 from dataclasses import dataclass
@@ -79,13 +80,28 @@ class AppApiClient:
             "Accept": "application/json",
         }
 
-    async def register_file_action(self, entry: FileActionsMenuEntry) -> None:
+    async def register_file_action(
+        self,
+        entry: FileActionsMenuEntry,
+        *,
+        retries: int = 30,
+        retry_delay_s: float = 10.0,
+    ) -> None:
         """POST a file-actions-menu entry to AppAPI.
 
-        AppAPI is idempotent on `name` — re-registering with the same
-        name updates the existing entry. Safe to call on every startup.
+        AppAPI rejects OCS calls with 401 "AppAPI authentication failed"
+        until the ExApp is `enabled` in `oc_ex_apps`. The bootstrap flow
+        enables the ExApp AFTER `app:register --wait-finish` completes,
+        and `--wait-finish` only returns after the container's first
+        heartbeat — by which time uvicorn has already finished lifespan
+        startup. So a freshly-spawned container ALWAYS fails the first
+        register attempt with 401 and must retry.
 
-        Returns on 2xx; raises on 4xx/5xx.
+        We retry up to `retries` times with `retry_delay_s` seconds
+        between attempts (default: ~5 minutes total). AppAPI is
+        idempotent on `name`, so retries are safe.
+
+        Returns on 2xx; raises after exhausting retries.
         """
         url = f"{self.config.nc_url.rstrip('/')}{FILE_ACTIONS_MENU_PATH}"
         payload: dict[str, object] = {
@@ -99,16 +115,45 @@ class AppApiClient:
         if entry.icon is not None:
             payload["icon"] = entry.icon
 
-        resp = await self._client.post(
-            url, headers=self._ocs_headers(), json=payload
-        )
-        if resp.status_code >= 400:
-            raise RuntimeError(
-                f"AppAPI file-actions-menu register failed "
-                f"({resp.status_code}): {resp.text[:300]}"
-            )
-        logger.info(
-            "registered FileActionsMenu entry name=%s actionHandler=%s",
-            entry.name,
-            entry.action_handler,
+        last_error = ""
+        for attempt in range(1, retries + 1):
+            try:
+                resp = await self._client.post(
+                    url, headers=self._ocs_headers(), json=payload
+                )
+            except httpx.HTTPError as exc:
+                last_error = f"transport error: {exc}"
+                logger.info(
+                    "FileActionsMenu register attempt %d/%d failed (%s) — retrying",
+                    attempt,
+                    retries,
+                    last_error,
+                )
+            else:
+                if resp.status_code < 400:
+                    logger.info(
+                        "registered FileActionsMenu entry name=%s actionHandler=%s "
+                        "(attempt %d)",
+                        entry.name,
+                        entry.action_handler,
+                        attempt,
+                    )
+                    return
+                last_error = f"HTTP {resp.status_code}: {resp.text[:300]}"
+                # 401 specifically means "ExApp not yet enabled" — keep
+                # retrying. Other 4xx are unlikely to recover, but we
+                # retry anyway in case AppAPI is mid-restart.
+                logger.info(
+                    "FileActionsMenu register attempt %d/%d returned %s — retrying",
+                    attempt,
+                    retries,
+                    last_error,
+                )
+
+            if attempt < retries:
+                await asyncio.sleep(retry_delay_s)
+
+        raise RuntimeError(
+            f"AppAPI file-actions-menu register failed after {retries} attempts "
+            f"(last: {last_error})"
         )
