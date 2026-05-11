@@ -71,9 +71,16 @@ class WebDavFileReader:
     """FileReader against Nextcloud's WebDAV endpoint.
 
     Uses HTTP Range / HEAD against /remote.php/dav/files/<user>/<path>.
-    Authentication is the AppAPI-issued per-user token; in v1 the host
-    treats the user_id + token as basic-auth credentials (AppAPI 5.x
-    docs).
+    Authenticates via the AppAPI-prescribed header set:
+
+      EX-APP-ID:               <appid>
+      EX-APP-VERSION:          <version>
+      AUTHORIZATION-APP-API:   base64(<user_id>:<app_secret>)
+
+    NC's AppAPI middleware (BasicAuthMiddleware / ExAppUsersMiddleware)
+    recognises this and impersonates the user when authorising WebDAV
+    access. Basic-auth with the APP_SECRET does not work for WebDAV —
+    only OCS endpoints accept that form.
     """
 
     def __init__(
@@ -82,12 +89,16 @@ class WebDavFileReader:
         base_url: str,
         user_id: str,
         token: str,
+        app_id: str = "ash_nazg",
+        app_version: str = "0.0.0",
         client: httpx.AsyncClient | None = None,
         timeout_s: float = 15.0,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.user_id = user_id
         self.token = token
+        self.app_id = app_id
+        self.app_version = app_version
         self._client = client or httpx.AsyncClient(timeout=timeout_s)
         self._owns_client = client is None
 
@@ -99,14 +110,20 @@ class WebDavFileReader:
         path = quote(files_path.lstrip("/"), safe="/")
         return f"{self.base_url}/remote.php/dav/files/{self.user_id}/{path}"
 
+    def _auth_headers(self) -> dict[str, str]:
+        import base64
+        raw = f"{self.user_id}:{self.token}".encode()
+        return {
+            "EX-APP-ID": self.app_id,
+            "EX-APP-VERSION": self.app_version,
+            "AUTHORIZATION-APP-API": base64.b64encode(raw).decode("ascii"),
+        }
+
     async def read_head(self, files_path: str, byte_count: int) -> bytes:
         url = self._url_for(files_path)
         end = max(0, byte_count - 1)
-        resp = await self._client.get(
-            url,
-            auth=(self.user_id, self.token),
-            headers={"Range": f"bytes=0-{end}"},
-        )
+        headers = {**self._auth_headers(), "Range": f"bytes=0-{end}"}
+        resp = await self._client.get(url, headers=headers)
         # 206 Partial Content on success; some servers return 200 with
         # the whole body when Range is unsupported — both are usable.
         if resp.status_code not in (200, 206):
@@ -119,7 +136,7 @@ class WebDavFileReader:
     async def get_size(self, files_path: str) -> int:
         url = self._url_for(files_path)
         resp = await self._client.head(
-            url, auth=(self.user_id, self.token), follow_redirects=True
+            url, headers=self._auth_headers(), follow_redirects=True
         )
         if resp.status_code >= 400:
             raise RuntimeError(
