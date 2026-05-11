@@ -260,7 +260,7 @@ class Dispatcher:
                 file_meta=meta,
                 user_id=user_id,
             )
-        except Exception as exc:  # noqa: BLE001 — surface any spawn failure as audit + 500
+        except Exception as exc:
             self.active.release(user_id, files_path)
             logger.exception("engine spawn failed")
             await self._audit(
@@ -305,5 +305,7 @@ class Dispatcher:
     async def _audit(self, outcome: str, **fields: Any) -> None:
         try:
             await self.audit.log(outcome=outcome, **fields)
-        except Exception:  # noqa: BLE001 — audit failures must not break dispatch
+        except Exception:
+            # Audit failures must NOT break dispatch — observability is
+            # degraded, not absent. Log locally and continue.
             logger.exception("audit log write failed for outcome=%s", outcome)

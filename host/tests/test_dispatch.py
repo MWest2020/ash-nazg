@@ -34,7 +34,6 @@ from ash_nazg.engines import FileMeta, SessionConfig
 from ash_nazg.engines.dosbox_x import DosboxXEngine
 from ash_nazg.engines.registry import EngineRegistry, RegisteredEngine
 
-
 # --- Fakes ----------------------------------------------------------------
 
 
@@ -240,7 +239,7 @@ async def test_oversize_refused_with_413() -> None:
 @pytest.mark.asyncio
 async def test_disabled_engine_is_skipped() -> None:
     reader = _FakeReader(_make_pe32_head())
-    dispatcher, spawner, audit = _dispatcher(
+    dispatcher, spawner, _ = _dispatcher(
         reader, registry=_disabled_dosbox_registry()
     )
     result = await dispatcher.dispatch(
@@ -287,7 +286,7 @@ async def test_concurrent_different_users_allowed() -> None:
 async def test_spawn_failure_returns_500_and_releases_session() -> None:
     reader = _FakeReader(_make_pe32_head())
     spawner = _FakeSpawner(fail=True)
-    dispatcher, _, audit = _dispatcher(reader, spawner=spawner)
+    dispatcher, _, _ = _dispatcher(reader, spawner=spawner)
     result = await dispatcher.dispatch(
         files_path="/Programs/app.exe", user_id="alice", is_admin=True
     )

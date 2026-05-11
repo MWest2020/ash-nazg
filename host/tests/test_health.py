@@ -25,15 +25,6 @@ def test_heartbeat_returns_plain_ok() -> None:
     assert response.text == "ok"
 
 
-def test_run_is_not_implemented_yet() -> None:
-    client = TestClient(app)
-    response = client.post("/run")
-
-    assert response.status_code == 501
-    body = response.json()
-    assert body["error"] == "not_implemented"
-
-
 def test_selftest_returns_canonical_skipped_shape() -> None:
     """Lock the self-test JSON shape so the wiring change can only
     swap values, never the schema. Per `nextcloud-distribution` spec
