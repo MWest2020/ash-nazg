@@ -24,8 +24,23 @@
     }
 
     # Everything else: Nextcloud.
+    #
+    # Caddy 2.x forwards ALL request headers by default (including
+    # Authorization and Cookie), so the explicit `header_up` lines
+    # below are defensive — they make the auth-forwarding intent
+    # visible in the config and pin behaviour across Caddy minor
+    # versions. wire-dosbox-engine debugging confirmed the proxy URL
+    # `/index.php/apps/app_api/proxy/ash_nazg/<path>` requires a real
+    # NC session: basic-auth via curl only works on OCS endpoints, not
+    # on the proxy controller (NC's session middleware kicks in).
+    # Test the proxy URL from a logged-in BROWSER session, not curl.
     handle {
-        reverse_proxy nextcloud:80
+        reverse_proxy nextcloud:80 {
+            header_up Authorization {http.request.header.Authorization}
+            header_up Cookie {http.request.header.Cookie}
+            header_up X-Forwarded-Proto {http.request.scheme}
+            header_up X-Forwarded-For {remote}
+        }
     }
 
     # Logging stays light — uncomment to debug.

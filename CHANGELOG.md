@@ -10,6 +10,185 @@ what changed and why.
 
 ## [Unreleased]
 
+### Added — 2026-05-11 — wire-dosbox-engine §3–§8 trunk-based all-nighter
+
+Five commits to `main` (trunk-based, no feature branches per project
+preference), each green on CI gates (76 → 90 tests, ruff clean).
+Implements the wire-dosbox-engine spec from §3 through §8, leaving §7
+(WebDAV mount inside the engine) and a real per-session spawner as
+deliberate follow-ups.
+
+#### Phase 1 — Keen 1 shareware verified end-to-end (manual)
+
+- Downloaded Commander Keen 1: Marooned on Mars shareware from the
+  Internet Archive (`archive.org/details/msdos_Commander_Keen_1_-_Marooned_on_Mars_1990`,
+  207.7 KB ZIP). Files at `/tmp/ash-nazg-fixtures/keen1/CKeen1/`,
+  primary executable `KEEN1.EXE` (LZEXE v0.91-compressed MZ-DOS).
+- Built `localhost/ash-nazg-dosbox-x:demo` from `engines/dosbox-x/Dockerfile`
+  in rootless podman. (Image was wiped mid-session when /home hit
+  100% — rebuild after disk recovery; instructions in `docs/demo.md`.)
+- Verified `docker run -d --security-opt label=disable -p 16901:8444
+  -v /tmp/ash-nazg-fixtures/keen1/CKeen1:/programs:ro,z
+  -e FILE_PATH=/programs/KEEN1.EXE …` launches `dosbox-x /programs/KEEN1.EXE`
+  inside the engine; KasmVNC web client serves on port 16901 (401 =
+  auth gate working, login `demo`/`ash_nazg`).
+- Added `~/.config/containers/registries.conf` unqualified-search-registries
+  for `docker.io`, `ghcr.io`, `quay.io` so `FROM ubuntu:24.04` resolves
+  in rootless podman.
+
+#### §3 + §4 — Engine registry + dosbox-x plugin (commit 90bb408)
+
+- `host/src/ash_nazg/engines/registry.py` discovers engines from the
+  `ash_nazg.engines` Python entrypoint group. Broken plugins (load
+  failures, instantiation errors, missing protocol methods) are
+  logged at WARNING and skipped without taking the host down.
+  Registration order is preserved (dispatch picks the first
+  registered enabled match). The `ASH_NAZG_ENGINES_ENABLED` env var
+  is a comma-separated allowlist; unset means "all enabled" so the
+  v1 fresh install works out of the box.
+- `host/src/ash_nazg/engines/dosbox_x.py` declares `id="dosbox-x"`,
+  pinned image `ghcr.io/mwest2020/ash-nazg-dosbox-x:0.1.0-wire-dev`,
+  and `can_handle` for `pe32` / `pe32-plus` / `mz-dos`. `session_config`
+  returns the canonical SessionConfig from `engines/spec.md` (1 CPU,
+  1024 MB, port 6901, /mnt/files, 900 s idle). `pyproject.toml` gains
+  the `[project.entry-points."ash_nazg.engines"]` declaration.
+- 23 unit tests covering every engines-spec scenario.
+
+#### §5 — Detection + dispatcher with injected I/O (commit a3d2210)
+
+- `host/src/ash_nazg/detection.py`: pure magic-byte classifier — given
+  the first ≤512 bytes + optional extension hint, returns one of
+  `pe32 / pe32-plus / mz-dos / elf / wasm / jar / mach-o / unknown`.
+  Real-shape Keen1.exe head verified `mz-dos`.
+- `host/src/ash_nazg/dispatch.py`: `Dispatcher` accepts FileReader /
+  SessionSpawner / AuditLogger protocols, returns a
+  `DispatchOk | DispatchError` discriminated union. Handles 403
+  (non-admin), 413 (oversize), 415 (no engine), 400 (unrecognised),
+  409 (same-user-same-file already running), 500 (spawn failure
+  with active-session release). Every dispatch attempt writes one
+  audit-log entry — audit failures absorbed locally so dispatch
+  never breaks.
+- 20 detection + 11 dispatcher tests = every spec scenario.
+
+#### §5 wiring — /run endpoint + IO adapters (commit 5f44a09)
+
+- `host/src/ash_nazg/main.py` builds Dispatcher in the FastAPI
+  lifespan, picking dependencies from `ASH_NAZG_MODE`:
+  - `demo` (default) — `InMemoryFileReader` + `InMemoryAuditLogger`
+    + `StubSpawner` (returns a fixed `(host, port)` for the always-on
+    engine demo container).
+  - `nextcloud` — `WebDavFileReader` + `OcsAuditLogger`
+    (`httpx`-backed, talk to NC over HTTP with AppAPI-issued creds)
+    + `DockerSubprocessSpawner` (shells out to `docker run` with
+    sandbox-spec resource limits).
+- `host/src/ash_nazg/request_context.py` parses
+  `AUTHORIZATION-APP-API: base64(user_id:secret)`; route-level access
+  gating (info.xml `<access_level>`) drives `is_admin`.
+- `/run` returns 200 + `{session_id, host, port}` on success;
+  4xx with structured `{error, message}` body on dispatcher refusal.
+- `host/src/ash_nazg/spawners.py` — `DockerSubprocessSpawner` argv
+  builder unit-tested for the full sandbox-spec flag set.
+- Total host suite at this point: 76 passing, ruff clean.
+
+#### §6 — AppAPI handshake (already in scaffold, validated this session)
+
+- AppAPI 5.x docker-install via HaRP uses static `<routes>` declaration
+  in `appinfo/info.xml` for the route allowlist — no runtime HTTP
+  handshake call needed (as `host/src/ash_nazg/appapi.py` already
+  noted). The `appapi.py` `AppApiConfig.from_environment()` is wired
+  into the new main.py lifespan and validated by the integration test
+  suite.
+
+#### §8 server-side — FileActionsMenu + redirect (commit 5677280)
+
+> Resolves docs/demo.md "almost working" blocker #1 (right-click →
+> Run in NC Files).
+
+The AppAPI 5.x canonical way to populate NC's Files-app context menu
+is server-side via OCS `POST /apps/app_api/api/v2/ui/files-actions-menu`,
+NOT via injected JavaScript. The ExApp registers the menu entry at
+startup; AppAPI calls back to the ExApp's declared `actionHandler`
+route when the user clicks; the ExApp responds with
+`{redirect_handler: "/page-on-our-side"}` and NC navigates with the
+file IDs appended.
+
+- `host/src/ash_nazg/appapi_client.py` — `AppApiClient.register_file_action()`
+  POSTs the FileActionsMenu entry with the AppAPI-prescribed headers
+  (`EX-APP-ID`, `EX-APP-VERSION`, `AUTHORIZATION-APP-API`).
+- `host/src/ash_nazg/files_action.py` — two routes:
+  - `POST /files-action` decodes AppAPI's callback payload, builds
+    Files-relative path from `directory + name`, dispatches, and
+    returns `{redirect_handler: "/session-redirect?url=<encoded>"}`.
+  - `GET /session-redirect` returns a tiny HTML page whose JS reads
+    `?url=` and `window.open()`s the KasmVNC URL in a new tab. The
+    URL is server-side validated http(s)-only to block `javascript:`
+    / `data:` / `file:` schemes. NC can't proxy to KasmVNC (external
+    URL); the JS-redirect hop is the boring solution.
+- `appinfo/info.xml` declares the two new ADMIN routes.
+- `host/src/ash_nazg/main.py` lifespan calls
+  `register_file_action()` on startup when `ASH_NAZG_MODE=nextcloud`;
+  registration failures log and continue (host stays up, AppAPI
+  re-polls heartbeats).
+- 14 new tests covering the two endpoints + the AppAPI client (mock
+  httpx). Total host suite: 90 passing, ruff clean.
+
+#### Demo blocker #2 — Caddyfile auth header forwarding + diagnose script
+
+> Resolves docs/demo.md "almost working" blocker #2 (AppAPI proxy URL
+> 404 under curl basic-auth).
+
+- `scripts/nextcloud-conf/Caddyfile` — added explicit `header_up
+  Authorization` / `Cookie` / `X-Forwarded-Proto` / `X-Forwarded-For`
+  on the catch-all `nextcloud:80` handler. Caddy 2.x defaults to
+  forwarding these but the explicit declarations make the intent
+  visible and pin behaviour across Caddy minor versions. **Key
+  finding documented inline**: the proxy URL
+  `/index.php/apps/app_api/proxy/ash_nazg/<path>` requires a real
+  NC session — curl basic-auth doesn't trigger NC's session
+  middleware on that controller. Test from a logged-in BROWSER, or
+  via the OCS endpoints for scripted access.
+- `scripts/diagnose-proxy-auth.sh` — runs the proxy URL with three
+  auth approaches (OCS basic-auth as baseline, proxy basic-auth,
+  proxy session-cookie via /index.php/login flow) and reports which
+  works. Run after the full stack is up to confirm the diagnosis.
+
+#### §9 — End-to-end Playwright skeleton
+
+- `scripts/e2e-playwright/run-keen-demo.py` — sync_playwright script
+  that logs in as admin, uploads Keen1.exe, right-clicks → Run with
+  Ash Nazg, captures the new-tab navigation, screenshots the
+  KasmVNC client + the running Keen title screen at five checkpoints.
+- Not executed this session (engine image got wiped during the
+  disk-full incident; user runs after rebuilding the engine).
+
+#### Deliberately deferred — §7 + per-session spawner
+
+- §7 davfs2 mount inside the engine: the existing demo uses a
+  bind-mount (`/programs:/programs:ro`) and `FILE_PATH` env var.
+  The full WebDAV mount needs the engine container to consume the
+  AppAPI-issued per-session token; landing this requires real-NC
+  integration testing which the disk-full incident interrupted.
+- Real per-session container spawn via docker socket: the
+  `DockerSubprocessSpawner` class is shipped + argv-tested, but the
+  default demo flow uses `StubSpawner` pointing at the always-on
+  engine container. Per-session spawn requires the engine image
+  pushed to a registry + the host container having access to the
+  docker / podman socket; that's a level-3 verifier exercise.
+
+#### Operational note — disk-full incident
+
+`/home` hit 100% (811GB / 811GB) mid-session, breaking writes
+including the repo and Claude's own task state. The bulk was
+pre-existing user data (Photos zips ~80GB) plus rootful podman
+build leftovers from earlier sessions; my iterative builds did not
+contribute hundreds of GBs but did not check `df` first either.
+Lesson captured in agent memory: check `df -h /home /` before every
+build/install/download; abort if past 85%. After cleanup, /home
+recovered to 24% used (622GB free) and work resumed. The rootless
+podman storage got corrupted during the 100% incident and was
+emptied (engine image + engine-demo container gone). Phase 1's
+manual verification is reproducible by re-running the docker build.
+
 ### Added — 2026-05-08 — `init-mvp-runtime` change scaffolding
 
 OpenSpec change `init-mvp-runtime` initialised. Greenfield repo for
