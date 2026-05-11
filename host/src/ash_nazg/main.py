@@ -34,7 +34,8 @@ from pydantic import BaseModel, Field
 
 from ash_nazg import __version__
 from ash_nazg.admin_settings import router as admin_settings_router
-from ash_nazg.appapi import APP_ID
+from ash_nazg.appapi import APP_ID, AppApiConfig
+from ash_nazg.appapi_client import AppApiClient, FileActionsMenuEntry
 from ash_nazg.dispatch import (
     ActiveSessionTracker,
     AuditLogger,
@@ -45,6 +46,12 @@ from ash_nazg.dispatch import (
     SessionSpawner,
 )
 from ash_nazg.engines.registry import discover_engines
+from ash_nazg.files_action import (
+    files_action_menu_entry,
+)
+from ash_nazg.files_action import (
+    router as files_action_router,
+)
 from ash_nazg.io_adapters import (
     InMemoryAuditLogger,
     InMemoryFileReader,
@@ -93,6 +100,39 @@ def _make_dependencies() -> tuple[FileReader, SessionSpawner, AuditLogger]:
     )
 
 
+async def _register_files_action_menu() -> None:
+    """Register our right-click menu entry with AppAPI.
+
+    In `ASH_NAZG_MODE=nextcloud` only — the demo bootstrap has no
+    AppAPI to talk to. Failure logs and continues (the host stays up
+    even if AppAPI is briefly unreachable; AppAPI re-polls heartbeats
+    and we re-register on next start).
+    """
+    try:
+        config = AppApiConfig.from_environment()
+    except KeyError:
+        logger.warning(
+            "AppAPI config env vars missing — skipping FileActionsMenu register"
+        )
+        return
+    entry_dict = files_action_menu_entry()
+    entry = FileActionsMenuEntry(
+        name=entry_dict["name"],
+        display_name=entry_dict["displayName"],
+        action_handler=entry_dict["actionHandler"],
+        mime=entry_dict["mime"],
+        permissions=entry_dict["permissions"],
+        order=entry_dict["order"],
+    )
+    client = AppApiClient(config)
+    try:
+        await client.register_file_action(entry)
+    except Exception:
+        logger.exception("FileActionsMenu registration failed — continuing anyway")
+    finally:
+        await client.aclose()
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """Build dispatcher dependencies once per process."""
@@ -111,6 +151,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         "ash-nazg host started — engines=%s",
         [r.engine.id for r in registry.all()],
     )
+
+    if os.environ.get("ASH_NAZG_MODE", MODE_DEMO).lower() == MODE_NEXTCLOUD:
+        await _register_files_action_menu()
+
     yield
     # Best-effort cleanup of HTTP adapters
     aclose = getattr(reader, "aclose", None)
@@ -130,6 +174,7 @@ app = FastAPI(
 
 app.include_router(selftest_router)
 app.include_router(admin_settings_router)
+app.include_router(files_action_router)
 
 # Serve the vite-built frontend bundle. The directory may not exist
 # on a fresh checkout; only mount when present so the app still starts

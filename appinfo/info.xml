@@ -162,6 +162,29 @@ losse packages toegevoegd.
                 <verb>GET</verb>
                 <access_level>USER</access_level>
             </route>
+            <!--
+                FileActionsMenu callback. AppAPI POSTs the clicked-on
+                file's metadata (fileId, name, directory, userId, …)
+                here; the ExApp returns a `redirect_handler` pointing
+                at /session-redirect. Registered by the host at startup
+                via OCS /apps/app_api/api/v2/ui/files-actions-menu.
+            -->
+            <route>
+                <url>^/?files-action$</url>
+                <verb>POST</verb>
+                <access_level>ADMIN</access_level>
+            </route>
+            <!--
+                The redirect-handler page NC navigates the user to after
+                a successful FileActionsMenu dispatch. Renders a tiny
+                HTML shell whose JS reads `?url=…` and window.open()s
+                the KasmVNC URL (external to NC, can't be proxied).
+            -->
+            <route>
+                <url>^/?session-redirect$</url>
+                <verb>GET</verb>
+                <access_level>ADMIN</access_level>
+            </route>
         </routes>
     </external-app>
 
