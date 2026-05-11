@@ -21,6 +21,9 @@ dev = [
     "mypy>=1.13,<2.0",
 ]
 
+[project.entry-points."ash_nazg.engines"]
+dosbox-x = "ash_nazg.engines.dosbox_x:DosboxXEngine"
+
 [build-system]
 requires = ["hatchling>=1.25"]
 build-backend = "hatchling.build"
