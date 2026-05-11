@@ -75,9 +75,26 @@ MODE_NEXTCLOUD: Final[str] = "nextcloud"
 DEFAULT_NETWORK_ENV: Final[str] = "ASH_NAZG_ENGINE_NETWORK"
 
 
+def _resolved_mode() -> str:
+    """Pick the dispatcher's operating mode from env.
+
+    Order:
+    - ASH_NAZG_MODE set explicitly → use it verbatim.
+    - Else, if AppAPI env vars present (HaRP-spawned containers)
+      → nextcloud.
+    - Else → demo.
+    """
+    explicit = os.environ.get("ASH_NAZG_MODE")
+    if explicit:
+        return explicit.lower()
+    if "APP_SECRET" in os.environ and "NEXTCLOUD_URL" in os.environ:
+        return MODE_NEXTCLOUD
+    return MODE_DEMO
+
+
 def _make_dependencies() -> tuple[FileReader, SessionSpawner, AuditLogger]:
     """Pick FileReader/SessionSpawner/AuditLogger based on env."""
-    mode = os.environ.get("ASH_NAZG_MODE", MODE_DEMO).lower()
+    mode = _resolved_mode()
     if mode == MODE_NEXTCLOUD:
         nc_url = os.environ["NEXTCLOUD_URL"]
         user_id = os.environ.get("EX_APP_USER", "admin")
@@ -152,8 +169,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         [r.engine.id for r in registry.all()],
     )
 
-    if os.environ.get("ASH_NAZG_MODE", MODE_DEMO).lower() == MODE_NEXTCLOUD:
+    if _resolved_mode() == MODE_NEXTCLOUD:
         await _register_files_action_menu()
+    else:
+        logger.info(
+            "AppAPI env vars absent — skipping FileActionsMenu register (demo bootstrap)"
+        )
 
     yield
     # Best-effort cleanup of HTTP adapters
