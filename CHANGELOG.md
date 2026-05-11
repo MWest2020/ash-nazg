@@ -161,19 +161,73 @@ file IDs appended.
 - Not executed this session (engine image got wiped during the
   disk-full incident; user runs after rebuilding the engine).
 
-#### Deliberately deferred — §7 + per-session spawner
+#### §7 — Three-mode engine entrypoint (commit 6afc951)
 
-- §7 davfs2 mount inside the engine: the existing demo uses a
-  bind-mount (`/programs:/programs:ro`) and `FILE_PATH` env var.
-  The full WebDAV mount needs the engine container to consume the
-  AppAPI-issued per-session token; landing this requires real-NC
-  integration testing which the disk-full incident interrupted.
+Engine `entrypoint.sh` rewritten to pick mode from env at runtime:
+
+  1. NEXTCLOUD_URL + APP_TOKEN + NC_USER_ID → davfs2 mount
+     /mnt/files (per-user, per-session-token secrets in
+     ~/.davfs2/secrets, chmod 600), then exec dosbox-x FILE_PATH
+     under the mount. Five retries with 2 s backoff.
+  2. FILE_PATH only → bind-mount path (orchestrator pre-mounted
+     the binary). The demo + integration-test path.
+  3. Neither set → bare DOSBox-X prompt. Smoke-test path.
+
+All three modes cd to the parent of FILE_PATH before exec'ing
+dosbox-x so the program's relative reads land in the same NC folder
+(files-integration spec "Working directory is the binary's
+directory"). Mode 2 verified end-to-end with a freshly-built engine
+image + Keen 1 bind-mount.
+
+#### Image rebuilds + storage.conf fix
+
+After the disk-full incident wiped rootless podman storage, a
+followup quota-options issue surfaced: `~/.config/containers/storage.conf`
+had `size = "30G"` under `[storage.options.overlay]`, which requires
+XFS project-quota support that the /home filesystem doesn't provide.
+The line was commented out (backup kept at
+`storage.conf.bak-20260511-215311`); podman builds proceed without
+per-layer size enforcement until XFS prjquota is configured.
+
+Both images rebuilt clean on rootless podman:
+- `localhost/ash-nazg-dosbox-x:demo` (477 MB)
+- `localhost/ash-nazg-host:0.1.0-wire-dev` (166 MB) — includes the
+  new dispatch / files-action / spawner code.
+
+#### Deliberately deferred — real per-session spawner
+
 - Real per-session container spawn via docker socket: the
   `DockerSubprocessSpawner` class is shipped + argv-tested, but the
   default demo flow uses `StubSpawner` pointing at the always-on
   engine container. Per-session spawn requires the engine image
   pushed to a registry + the host container having access to the
   docker / podman socket; that's a level-3 verifier exercise.
+
+#### To finish bringing up the stack (manual steps)
+
+The auto-mode classifier blocked `chmod 0666` on the rootless podman
+socket (security weakening), so the stack-up is left to the user:
+
+```bash
+# 1. Allow HaRP to reach the rootless podman socket
+chmod 0666 /run/user/$(id -u)/podman/podman.sock
+
+# 2. Remove standalone engine-demo if running (compose stack has its own)
+docker rm -f engine-demo
+
+# 3. Bring the full stack up
+docker compose -f scripts/local-nextcloud-stack.yml up -d
+
+# 4. Bootstrap: register ExApp via HaRP, push host image to local registry
+./scripts/bootstrap-nextcloud.sh
+
+# 5. Verify the proxy URL hypotheses
+./scripts/diagnose-proxy-auth.sh
+
+# 6. (optional) Run the Playwright end-to-end against the live stack
+uv run --with playwright python scripts/e2e-playwright/run-keen-demo.py
+playwright install chromium  # one-time
+```
 
 #### Operational note — disk-full incident
 
