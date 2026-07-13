@@ -1,0 +1,13 @@
+{
+  "role": "builder",
+  "change": "apply-docs-contract",
+  "run_id": "builder-apply-docs-contract-20260713-072841",
+  "repo": "https://github.com/MWest2020/ash-nazg.git",
+  "verdict": "ok",
+  "subtype": "success",
+  "total_cost_usd": "0.7749115000000002",
+  "num_turns": "23",
+  "claude_exit": "0",
+  "finished_at": "2026-07-13T07:31:31Z",
+  "diff_hash": "522246f78cef1e3424efb06124f9f5de2cfcba795134a1d8a237630f2c7251c3"
+}
