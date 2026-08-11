@@ -71,6 +71,10 @@ class StubSpawner:
             port=self.port,
         )
 
+    async def preflight(self) -> tuple[bool, str]:
+        """The stub has no backend to reach; it is always ready."""
+        return True, f"stub spawner ready → {self.host}:{self.port} (demo mode)"
+
 
 # --- Docker subprocess -------------------------------------------------------
 
@@ -104,6 +108,31 @@ class DockerSubprocessSpawner:
         self.network = network
         self.extra_env = extra_env or {}
         self.container_label_app = container_label_app
+
+    async def preflight(self) -> tuple[bool, str]:
+        """Probe the deploy daemon (docker/podman socket) without spawning.
+
+        Runs `<docker_bin> version` with a short timeout; a zero exit means
+        the socket is reachable. Returns (False, real error) otherwise — the
+        self-test surfaces that verbatim rather than vague text.
+        """
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                self.docker_bin, "version", "--format", "{{.Server.Version}}",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=5.0)
+        except FileNotFoundError:
+            return False, f"{self.docker_bin} binary not found on PATH"
+        except TimeoutError:
+            return False, f"{self.docker_bin} version timed out after 5s"
+        if proc.returncode != 0:
+            return False, (
+                f"{self.docker_bin} daemon unreachable "
+                f"(exit {proc.returncode}): {stderr.decode(errors='replace').strip()}"
+            )
+        return True, f"{self.docker_bin} daemon reachable (server {stdout.decode().strip()})"
 
     async def spawn(
         self,

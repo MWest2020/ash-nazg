@@ -1,8 +1,25 @@
 # Tasks — wire-dosbox-engine
 
-> **Status: DRAFT.** Skeleton. Refine into concrete sub-tasks at
-> the start of the implementation session via `/opsx:propose`-style
-> drill-down.
+> **Reconciliatie-status (2026-08-11).** De **host-code is compleet en
+> unit-getest** (97 tests groen, ruff schoon in `host/`):
+> - §3 Engine registry — `registry.py` (discovery, broken-skip, admin-disable). ✓
+> - §4 dosbox-x engine — `dosbox_x.py` (`can_handle` pe32/pe32-plus/mz-dos,
+>   `session_config`), entrypoint geregistreerd in `host/pyproject.toml`. ✓
+> - §5 Dispatcher — `dispatch.py` + `/run` (200/415/400/403), per-dispatch audit. ✓
+> - §7 Engine-entrypoint — `engines/dosbox-x/entrypoint.sh` is geschreven
+>   (davfs2-mount + kasmvnc + `exec dosbox-x`); **draaien** vereist de container. env-gated.
+> - §9 Self-test — **nu echt** (`selftest.py`): host-health, engines-registered,
+>   audit-log-write live getest; deploy-daemon-spawn als spawner-`preflight()`
+>   (daemon-bereikbaarheid). De volle §9.3 (busybox spawn+teardown via HaRP) is env-gated. ✓/~
+> - §10 Tests — `test_detection`, `test_registry`, `test_run_endpoint`, `test_selftest` groen. ✓
+>
+> **Nog open — env-gated, niet uitvoerbaar in de agent-omgeving** (geen docker-daemon,
+> geen NC 32/AppAPI 5.x/HaRP/GHCR): §1 HaRP-verifier-rewrite, §2 GHCR image-pull,
+> §6 HaRP route-registration-handshake (lifespan-registratie bestaat host-side),
+> §9.3-volledig, §11 docs-bumps, §12 hand-off, en de **level-3-acceptatie**
+> (`scripts/verify-against-nextcloud.sh` op NC 32 + AppAPI 5.x). Daarom blijft deze
+> change **open** (niet gearchiveerd) tot 'ie op een echte NC/HaRP/docker-host draait.
+> De checkboxes hieronder blijven het volledige plan.
 >
 > **Architectural decision (locked in):** docker-install via HaRP
 > for **both** production and level-3. See `design.md` §

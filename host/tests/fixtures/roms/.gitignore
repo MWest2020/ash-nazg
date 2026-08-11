@@ -1,0 +1,4 @@
+# Copyrighted ROMs are never committed; the playthrough test loads them locally.
+*
+!.gitignore
+!README.md

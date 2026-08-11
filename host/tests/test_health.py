@@ -25,10 +25,11 @@ def test_heartbeat_returns_plain_ok() -> None:
     assert response.text == "ok"
 
 
-def test_selftest_returns_canonical_skipped_shape() -> None:
-    """Lock the self-test JSON shape so the wiring change can only
-    swap values, never the schema. Per `nextcloud-distribution` spec
-    requirement *Self-check passes on healthy install*.
+def test_selftest_returns_canonical_shape() -> None:
+    """Lock the self-test JSON shape (ids + order normative) so the schema
+    stays stable for the frontend. Per `nextcloud-distribution` spec
+    requirement *Self-check passes on healthy install*. Values are now real
+    (wire-dosbox-engine); see test_selftest.py for the per-check verdicts.
     """
     client = TestClient(app)
     response = client.post("/selftest")
@@ -36,7 +37,7 @@ def test_selftest_returns_canonical_skipped_shape() -> None:
     assert response.status_code == 200
     body = response.json()
 
-    assert body["overall"] == "skipped"
+    assert body["overall"] in {"ok", "fail", "skipped"}
     assert isinstance(body["checks"], list)
 
     expected_ids = [
@@ -52,8 +53,8 @@ def test_selftest_returns_canonical_skipped_shape() -> None:
     )
 
     for check in body["checks"]:
-        assert check["status"] == "skipped"
-        assert check["message"] == "not yet implemented"
+        assert check["status"] in {"ok", "fail", "skipped"}
+        assert isinstance(check["message"], str)
 
 
 def test_admin_settings_renders_html_shell() -> None:
