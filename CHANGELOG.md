@@ -10,6 +10,60 @@ what changed and why.
 
 ## [Unreleased]
 
+### Fixed — 2026-09-09 — wire-dosbox-engine: level-3 green on a real NC 32 + HaRP host
+
+First run of this change against real infrastructure: Nextcloud
+32.0.14 + AppAPI 5.x + HaRP v0.4.0 on a Docker host (a Proxmox VM,
+`ash-nazg-lab`). `scripts/verify-against-nextcloud.sh` now passes from
+an empty stack — HaRP pulls the host image from the stack's registry,
+spawns the container, allocates the port (`oc_ex_apps.port` equals the
+injected `APP_PORT`, with the old SQL patch gone), the ExApp completes
+AppAPI's lifecycle handshake, and `/health`, `/admin/settings` and
+`/selftest` all answer through the AppAPI proxy.
+
+Five defects that only a real deploy daemon could surface:
+
+- **The host image had no FRP client.** HaRP reaches an ExApp solely
+  through the tunnel the ExApp opens; a directly-bound container port
+  is never used, whatever the compose network allows. The image now
+  ships a pinned, SHA256-verified `frpc` plus `start.sh` (vendored
+  from nextcloud/HaRP), and uvicorn binds the unix socket
+  `/tmp/exapp.sock` when `HP_SHARED_KEY` is present, TCP otherwise.
+- **`/heartbeat` returned plain text.** AppAPI parses the body, so
+  `ok` was logged as a failed heartbeat at HTTP 200 and registration
+  never finished. It now returns `{"status": "ok"}`.
+- **`/init` and `/enabled` did not exist.** `app:register
+  --wait-finish` waits for the ExApp to report progress 100 via
+  `PUT /ocs/v1.php/apps/app_api/ex-app/status`. Both routes are
+  implemented, and the Files right-click entry is registered from
+  `/enabled` — the first moment AppAPI accepts OCS calls from an
+  ExApp (before that: 401 "AppAPI authentication failed").
+- **The deploy daemon pointed at the Nextcloud container.** AppAPI
+  builds ExApp URLs as `<nextcloud_url>/exapps/<appid>/…` and expects
+  that path to reach HaRP; Apache answers 404. The bootstrap now
+  registers the daemon against the reverse proxy (`http://caddy`).
+- **The audit logger could not write.** It POSTed to
+  `apps/admin_audit/api/v1/event` (does not exist — 404) using basic
+  auth (an ExApp has no NC password — 401). It now uses AppAPI's log
+  endpoint with the `AUTHORIZATION-APP-API` header; the
+  `audit-log-write` self-check is green live.
+
+Also: the local stack disables HaRP's FRP TLS, because v0.4.0 does not
+mount its `/certs/frp` material into the ExApps it spawns, so an
+ExApp's frpc has no client cert for the default mTLS. `push
+--tls-verify=false` (a podman flag) no longer breaks the bootstrap on
+Docker. Level-3 assertions were rewritten to run through the AppAPI
+proxy and to check the port equality and the absence of the SQL patch.
+
+Still open, and it is one thing: the host shim spawns engine
+containers with `docker run`, which an ExApp container cannot do (no
+CLI, no socket, and HaRP exposes no spawn API to ExApps). The
+`deploy-daemon-spawn` self-check reports exactly that, the verifier
+pins it as the known gap, and
+`openspec/changes/wire-dosbox-engine/tasks.md` carries the three
+options and a recommendation.
+
+
 ### Added — 2026-05-11 — wire-dosbox-engine §3–§8 trunk-based all-nighter
 
 Five commits to `main` (trunk-based, no feature branches per project

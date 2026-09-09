@@ -1,32 +1,47 @@
 # Tasks — wire-dosbox-engine
 
-> **Reconciliatie-status (2026-08-11).** De **host-code is compleet en
-> unit-getest** (97 tests groen, ruff schoon in `host/`):
-> - §3 Engine registry — `registry.py` (discovery, broken-skip, admin-disable). ✓
-> - §4 dosbox-x engine — `dosbox_x.py` (`can_handle` pe32/pe32-plus/mz-dos,
->   `session_config`), entrypoint geregistreerd in `host/pyproject.toml`. ✓
-> - §5 Dispatcher — `dispatch.py` + `/run` (200/415/400/403), per-dispatch audit. ✓
-> - §7 Engine-entrypoint — `engines/dosbox-x/entrypoint.sh` is geschreven
->   (davfs2-mount + kasmvnc + `exec dosbox-x`); **draaien** vereist de container. env-gated.
-> - §9 Self-test — **nu echt** (`selftest.py`): host-health, engines-registered,
->   audit-log-write live getest; deploy-daemon-spawn als spawner-`preflight()`
->   (daemon-bereikbaarheid). De volle §9.3 (busybox spawn+teardown via HaRP) is env-gated. ✓/~
-> - §10 Tests — `test_detection`, `test_registry`, `test_run_endpoint`, `test_selftest` groen. ✓
+> **Reconciliatie-status (2026-09-09).** De change is voor het eerst
+> tegen een **echte** stack gedraaid: NC 32.0.14 + AppAPI 5.x + HaRP
+> v0.4.0 op een Docker-host (proxmox-VM `ash-nazg-lab`). Level-3
+> (`scripts/verify-against-nextcloud.sh`) is **groen** vanaf een lege
+> stack: HaRP pullt het image uit de registry, spawnt de container,
+> deelt de poort uit (`oc_ex_apps.port` = `APP_PORT`, géén SQL-patch),
+> de ExApp doorloopt de lifecycle (heartbeat → init → enabled) en is
+> bereikbaar via de AppAPI-proxy.
 >
-> **Nog open — env-gated, niet uitvoerbaar in de agent-omgeving** (geen docker-daemon,
-> geen NC 32/AppAPI 5.x/HaRP/GHCR): §1 HaRP-verifier-rewrite, §2 GHCR image-pull,
-> §6 HaRP route-registration-handshake (lifespan-registratie bestaat host-side),
-> §9.3-volledig, §11 docs-bumps, §12 hand-off, en de **level-3-acceptatie**
-> (`scripts/verify-against-nextcloud.sh` op NC 32 + AppAPI 5.x). Daarom blijft deze
-> change **open** (niet gearchiveerd) tot 'ie op een echte NC/HaRP/docker-host draait.
-> De checkboxes hieronder blijven het volledige plan.
+> Wat dat aan het licht bracht — vier dingen die alleen op een echte
+> host zichtbaar waren, alle vier opgelost:
+> 1. **frpc ontbrak in het host-image.** HaRP bereikt een ExApp
+>    uitsluitend door de FRP-tunnel die de ExApp zélf opzet; een
+>    direct gebonden containerpoort wordt nooit gebruikt. Image ships
+>    nu `frpc` + `start.sh` (vendored uit nextcloud/HaRP) en uvicorn
+>    luistert op de unix-socket als `HP_SHARED_KEY` gezet is.
+> 2. **`/heartbeat` gaf plain-text `ok`.** AppAPI leest de body:
+>    alles wat geen `{"status": "ok"}` is telt als *failed heartbeat*
+>    bij HTTP 200, en de registratie loopt oneindig door.
+> 3. **`/init` en `/enabled` ontbraken.** Zonder init-rapport
+>    (`PUT /ocs/v1.php/apps/app_api/ex-app/status`, progress 100)
+>    keert `app:register --wait-finish` nooit terug.
+> 4. **De daemon wees naar de NC-container.** AppAPI bouwt ExApp-URLs
+>    als `<nextcloud_url>/exapps/<appid>/…` en verwacht dat die naar
+>    HaRP gerouteerd worden; Apache antwoordt 404. De daemon wijst nu
+>    naar de reverse proxy (`http://caddy`).
 >
-> **Architectural decision (locked in):** docker-install via HaRP
-> for **both** production and level-3. See `design.md` §
-> *Decision: (c) — docker-install via HaRP*. Manual-install with a
-> SQL workaround was the scaffolding compromise; this change ends
-> it. Tasks below are ordered to validate the verifier and image
-> distribution path BEFORE writing any engine wiring on top.
+> Plus: de audit-logger schreef naar `apps/admin_audit/api/v1/event`
+> (bestaat niet — 404) met basic auth (kan niet — 401). Nu AppAPI's
+> log-endpoint met de `AUTHORIZATION-APP-API`-header; live groen.
+>
+> **Nog open, en het is één ding:** de host-shim spawnt engine-
+> containers via `docker run`, en een ExApp-container heeft geen
+> docker-CLI, geen socket, en HaRP biedt ExApps geen spawn-API. Zie
+> *Open ontwerpbesluit* onderaan. Daarop wachten: §7 (entrypoint
+> draaien), §8 (frontend wiring — zonder werkende spawn levert dat
+> alleen een knop die altijd faalt), §9.3, §12, en de laatste
+> acceptatiebullet (`POST /run` spawnt een container).
+>
+> §2 (GHCR) is bewust nog open: level-3 gebruikt de lokale registry
+> in de stack als GHCR-stand-in, wat dezelfde pull-en-spawn-weg door
+> HaRP aflegt. De echte GHCR-push is CI-werk op een tag.
 
 ## 1. HaRP-based level-3 verifier rewrite
 
@@ -34,17 +49,17 @@ The scaffold's `scripts/local-nextcloud-stack.yml` runs the host
 container directly under compose with manual-install + a SQL port
 patch. That model is retired in this change.
 
-- [ ] 1.1 Add an `appapi-harp` service to
+- [x] 1.1 Add an `appapi-harp` service to
         `scripts/local-nextcloud-stack.yml` — image
         `ghcr.io/nextcloud/nextcloud-appapi-harp` (verify exact
         repo path against AppAPI 5.x docs at implementation time),
         with the rootless podman socket mounted at
         `/var/run/docker.sock`. Wire it onto the same network as
         Nextcloud.
-- [ ] 1.2 **Remove** the `ash-nazg-host` service from the compose
+- [x] 1.2 **Remove** the `ash-nazg-host` service from the compose
         file. HaRP spawns it on demand at `app_api:app:register`
         time; it must NOT be co-started by compose.
-- [ ] 1.3 Rewrite `scripts/bootstrap-nextcloud.sh`:
+- [x] 1.3 Rewrite `scripts/bootstrap-nextcloud.sh`:
     - Register the HaRP daemon with `docker-install` deploy id
       (replacing the manual-install daemon).
     - Register the ExApp via `app_api:app:register ash_nazg
@@ -55,7 +70,7 @@ patch. That model is retired in this change.
     - Delete the docker-cp of `info.xml` if AppAPI 5.x can read
       it from a different path; otherwise keep that step but
       document why.
-- [ ] 1.4 Update `scripts/verify-against-nextcloud.sh` assertions:
+- [x] 1.4 Update `scripts/verify-against-nextcloud.sh` assertions:
     - Keep: `/health` returns canonical body, `/selftest` returns
       4-check skipped JSON, `/admin/settings` shell renders.
     - **New positive assertion**: `GET /index.php/apps/app_api/proxy/ash_nazg/health`
@@ -64,7 +79,7 @@ patch. That model is retired in this change.
       the "404-by-design" caveat from `docs/testing.md`.
     - **New positive assertion**: container spawned by HaRP shows
       up in `docker ps` with the expected name pattern.
-- [ ] 1.5 Update `docs/testing.md`:
+- [x] 1.5 Update `docs/testing.md`:
     - Remove the "404 is by design" wording for the proxy URL.
     - Document the new HaRP dependency (rootless podman socket,
       or rootful docker socket; both supported).
@@ -85,7 +100,7 @@ code helps.
 - [ ] 2.2 Update `appinfo/info.xml` `<image-tag>` to the same
         `0.1.0-wire-dev` value (still no `latest`; the
         `verify-info-xml.sh` allowlist still passes).
-- [ ] 2.3 Re-run the level-3 verifier against the now-rewritten
+- [x] 2.3 Re-run the level-3 verifier against the now-rewritten
         compose stack. HaRP pulls from `ghcr.io/...` and spawns a
         fresh container — no `localhost/ash-nazg-host` dependency.
 - [ ] 2.4 If the pull fails on auth, document the credential
@@ -100,59 +115,67 @@ code helps.
 
 ## 3. Engine registry
 
-- [ ] 3.1 `host/src/ash_nazg/engines/registry.py` discovers engines
+- [x] 3.1 `host/src/ash_nazg/engines/registry.py` discovers engines
         via the `ash_nazg.engines` Python entrypoint group.
-- [ ] 3.2 Broken engines (missing attrs, raises on load) are logged
+- [x] 3.2 Broken engines (missing attrs, raises on load) are logged
         and skipped without taking the host down.
-- [ ] 3.3 Admin-disabled engines are excluded from the dispatch
+- [x] 3.3 Admin-disabled engines are excluded from the dispatch
         list. New engines default to disabled.
 
 ## 4. dosbox-x engine plugin
 
-- [ ] 4.1 `host/src/ash_nazg/engines/dosbox_x.py` implements the
+- [x] 4.1 `host/src/ash_nazg/engines/dosbox_x.py` implements the
         `Engine` Protocol. `can_handle()` returns True for `pe32`,
         `pe32-plus`, `mz-dos`.
-- [ ] 4.2 `session_config()` returns the canonical SessionConfig
+- [x] 4.2 `session_config()` returns the canonical SessionConfig
         from `engines/spec.md` (1 CPU, 1024 MB, 900 s idle, port
         6901, `/mnt/files`).
-- [ ] 4.3 Registered as a `[project.entry-points."ash_nazg.engines"]`
+- [x] 4.3 Registered as a `[project.entry-points."ash_nazg.engines"]`
         in `host/pyproject.toml`.
 
 ## 5. Dispatcher
 
-- [ ] 5.1 `host/src/ash_nazg/dispatch.py` reads the file's first
+- [x] 5.1 `host/src/ash_nazg/dispatch.py` reads the file's first
         ≤512 bytes via WebDAV range request, classifies, and
         selects an engine.
-- [ ] 5.2 `/run` endpoint replaces the 501 stub; returns
+- [x] 5.2 `/run` endpoint replaces the 501 stub; returns
         `{session_id, host, port}` on success, `415` for unhandled
         formats, `400` for unrecognised, `403` for non-admin.
-- [ ] 5.3 Per-dispatch audit-log entry per `detection` and
+- [x] 5.3 Per-dispatch audit-log entry per `detection` and
         `sandbox` specs.
 
-## 6. AppAPI registration handshake (HaRP-spawned env consumption)
+## 6. AppAPI lifecycle handshake (HaRP-spawned env consumption)
 
 In docker-install via HaRP, AppAPI sets `APP_HOST`, `APP_PORT`,
-`APP_SECRET`, `APP_VERSION`, `APP_ID`, `NEXTCLOUD_URL` as env
-vars on the spawned container. The host shim **accepts** these,
-not chooses them.
+`APP_SECRET`, `APP_VERSION`, `APP_ID`, `NEXTCLOUD_URL`, `HP_SHARED_KEY`
+and `HP_FRP_ADDRESS`/`HP_FRP_PORT` on the spawned container. The host
+shim **accepts** these, it does not choose them.
 
-- [ ] 6.1 `appapi.register()` becomes real (replaces
-        `NotImplementedError`). Reads the env vars HaRP set,
-        binds uvicorn to `APP_PORT`, and POSTs the **route
-        registration** to AppAPI (the port is already known to
-        AppAPI; only the routes still need explicit declaration).
-- [ ] 6.2 Wired into the FastAPI `lifespan` hook so it runs at
-        startup, before the server starts accepting `/run`.
-- [ ] 6.3 Routes payload includes every proxy path the ExApp
-        wants exposed: `/health`, `/admin/settings`, `/selftest`,
-        `/run`, plus the static-bundle paths under `/static/...`.
-        Without this, the AppAPI proxy 404s; with it, NC users
-        reach the admin page through
-        `/index.php/apps/app_api/proxy/ash_nazg/...`.
-- [ ] 6.4 Exponential-backoff retry up to 5 minutes on
-        registration failure; non-zero exit on persistent
-        failure. Distinguish "AppAPI unreachable" from "AppAPI
-        rejected payload" in the error log.
+Route registration turned out NOT to be a runtime POST: AppAPI 5.x
+reads the proxy allowlist from `<external-app><routes>` in `info.xml`
+at register time. What the shim owes AppAPI instead is the lifecycle
+handshake — and *that* is what `--wait-finish` blocks on.
+
+- [x] 6.1 Ship `frpc` + `start.sh` in the host image and bind uvicorn
+        to the unix socket `/tmp/exapp.sock` (umask 0177) when
+        `HP_SHARED_KEY` is set; TCP `APP_PORT` otherwise. Without the
+        tunnel HaRP cannot reach the ExApp at all — its haproxy has no
+        route to a directly-bound container port.
+- [x] 6.2 `GET /heartbeat` returns `{"status": "ok"}` as JSON. AppAPI
+        parses the body; a plain-text `ok` is recorded as a failed
+        heartbeat *at HTTP 200*.
+- [x] 6.3 `POST /init` answers `{}` and reports progress 100 in the
+        background via `PUT /ocs/v1.php/apps/app_api/ex-app/status`.
+        Until that report lands, `app:register --wait-finish` hangs.
+- [x] 6.4 `PUT /enabled?enabled=1` answers `{"error": ""}` and
+        registers the Files right-click entry from there — enabling is
+        the first moment AppAPI accepts OCS calls from the ExApp
+        (before that: 401 "AppAPI authentication failed"). A few short
+        retries suffice; the old startup-time register needed minutes
+        of them and still failed.
+- [x] 6.5 The deploy daemon's `nextcloud_url` points at the reverse
+        proxy that routes `/exapps/*` to HaRP, not at the Nextcloud
+        container.
 
 ## 7. Engine container entrypoint
 
@@ -176,31 +199,31 @@ not chooses them.
 
 ## 9. Self-test — replace stubs with real checks
 
-- [ ] 9.1 `host-health`: in-container `/health` probe.
-- [ ] 9.2 `engines-registered`: ≥1 enabled engine.
+- [x] 9.1 `host-health`: in-container `/health` probe.
+- [x] 9.2 `engines-registered`: ≥1 enabled engine.
 - [ ] 9.3 `deploy-daemon-spawn`: spawn + tear down a busybox
         sidecar via HaRP within 30 s. Rewrites the original
         AppAPI-4 manual-install version of this check.
-- [ ] 9.4 `audit-log-write`: write `ash_nazg.selftest` and assert
+- [x] 9.4 `audit-log-write`: write `ash_nazg.selftest` and assert
         2xx from the AppAPI audit-log API.
 
 ## 10. Tests
 
-- [ ] 10.1 Unit tests for `dispatch.detect()` covering every
+- [x] 10.1 Unit tests for `dispatch.detect()` covering every
         magic family from the `detection` spec.
-- [ ] 10.2 Unit tests for `registry` covering load failures,
+- [x] 10.2 Unit tests for `registry` covering load failures,
         admin-disable, ordering.
-- [ ] 10.3 Host-only integration test that mocks AppAPI's
+- [x] 10.3 Host-only integration test that mocks AppAPI's
         spawn-time env injection and asserts the host shim binds
         to `APP_PORT` and registers its routes.
 
 ## 11. Docs touch-ups (small but non-trivial)
 
-- [ ] 11.1 `docs/installation.md` — bump documented minimum to
+- [x] 11.1 `docs/installation.md` — bump documented minimum to
         NC 32 + AppAPI 5.x. NC 30 + AppAPI 4.0.6 stays in
         `CHANGELOG.md` as the historical first-verified target,
         not a support claim.
-- [ ] 11.2 `docs/testing.md` — remove the "404 is by design"
+- [x] 11.2 `docs/testing.md` — remove the "404 is by design"
         wording for the proxy URL (handled in §1.5 above as part
         of the verifier rewrite, but worth the explicit checkbox).
 
@@ -211,3 +234,41 @@ not chooses them.
 - [ ] 12.2 Archive `wire-dosbox-engine` once §1–§10 are green and
         a manual run produces DOSBox-X output (no streaming yet
         — `docker exec` into the engine container to verify).
+
+## Open ontwerpbesluit — hoe spawnt een ExApp een engine-container?
+
+Het live-blok. `design.md` tekent de host-shim die `POST /spawn` naar
+de deploy daemon stuurt; die API bestaat niet. Wat er wél is:
+
+- `DockerSubprocessSpawner` shelt `docker run` uit. In een ExApp-
+  container is er geen docker-CLI en geen socket — de self-test zegt
+  het zonder omhaal: `docker binary not found on PATH`.
+- HaRP's docker-engine-backend is er voor AppAPI, niet voor ExApps.
+  Met de gedeelde sleutel komt een ExApp langs de auth (401 wordt
+  404), maar elk docker-pad antwoordt 404; er is geen sanctioned
+  spawn-oppervlak voor ExApps.
+
+Drie wegen, en dit is een productbeslissing, geen implementatiedetail:
+
+**(a) Eén container, engine erin.** dosbox-x + KasmVNC in het host-
+image; geen sibling-spawn. Simpelste installatie (werkt op elke
+App-Store-install, geen extra rechten), maar sessie-isolatie tussen
+gebruikers verdwijnt en het image wordt fors. De compose-stack heeft
+hier al een aanzet voor: `engine-dosbox` draait als always-on service.
+
+**(b) Docker-socket eisen.** De admin mount een socket in de ExApp
+(`DOCKER_HOST`). Houdt per-sessie-isolatie, maar het is precies het
+soort privilege waar de App Store review op let, en het maakt de app
+onbruikbaar voor de meeste beheerde installs.
+
+**(c) Elke engine een eigen ExApp.** AppAPI spawnt ze, wat de
+gesanctioneerde weg is; de host-shim vraagt AppAPI om deploy/enable.
+Zwaarste variant: elke engine wordt een eigen App-Store-item met een
+eigen levenscyclus.
+
+Aanbeveling: **(a) voor de MVP-demo**, met (c) als richting zodra er
+meer dan één engine is. (b) alleen als bewuste "advanced setup", nooit
+als default.
+
+Tot dit besluit valt blijven open: §7, §8, §9.3, §12 en de
+acceptatiebullet over `POST /run`.

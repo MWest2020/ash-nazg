@@ -12,11 +12,16 @@ inside the engine container.
 
 from __future__ import annotations
 
+import base64
+import json
 import logging
 from typing import Any
 from urllib.parse import quote
 
 import httpx
+
+# AppAPI log levels mirror NC's: 0 debug, 1 info, 2 warning …
+_LOG_LEVEL_INFO = 1
 
 logger = logging.getLogger(__name__)
 
@@ -155,16 +160,22 @@ class WebDavFileReader:
 
 
 class OcsAuditLogger:
-    """Writes audit-log entries via Nextcloud's OCS audit-log API.
+    """Writes audit-log entries via AppAPI's ExApp log endpoint.
 
-    Currently a thin wrapper: each call POSTs the supplied fields as a
-    single audit entry. If the OCS call fails, the dispatcher's
-    try/except absorbs the error and logs locally — audit failures
-    must never break dispatch (sandbox-spec safety: dispatch always
-    proceeds; observability is degraded but not absent).
+    Each call POSTs the supplied fields as a single entry. If the OCS
+    call fails, the dispatcher's try/except absorbs the error and logs
+    locally — audit failures must never break dispatch (sandbox-spec
+    safety: dispatch always proceeds; observability is degraded but not
+    absent).
+
+    Auth is AppAPI's, not Nextcloud's: an ExApp has no NC password, so
+    basic auth returns 401 "Unauthorised" (997) no matter what it
+    sends. The AUTHORIZATION-APP-API header carries
+    base64(user_id:APP_SECRET), with an empty user id for the system
+    context — verified live against NC 32 / AppAPI 5.
     """
 
-    OCS_PATH = "/ocs/v2.php/apps/admin_audit/api/v1/event"
+    OCS_PATH = "/ocs/v2.php/apps/app_api/api/v1/log"
 
     def __init__(
         self,
@@ -172,12 +183,14 @@ class OcsAuditLogger:
         base_url: str,
         user_id: str,
         token: str,
+        app_version: str = "0.0.0",
         client: httpx.AsyncClient | None = None,
         timeout_s: float = 10.0,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.user_id = user_id
         self.token = token
+        self.app_version = app_version
         self._client = client or httpx.AsyncClient(timeout=timeout_s)
         self._owns_client = client is None
 
@@ -187,15 +200,24 @@ class OcsAuditLogger:
 
     async def log(self, **fields: Any) -> None:
         url = f"{self.base_url}{self.OCS_PATH}"
-        payload = {
+        entry = {
             "app": "ash_nazg",
             "event": fields.pop("outcome", "ash_nazg.execution"),
             "data": fields,
         }
+        # AppAPI's log endpoint takes a level + a flat message; the
+        # audit fields ride along as JSON so nothing is lost.
+        payload = {"level": _LOG_LEVEL_INFO, "message": json.dumps(entry)}
         resp = await self._client.post(
             url,
-            auth=(self.user_id, self.token),
-            headers={"OCS-APIREQUEST": "true"},
+            headers={
+                "EX-APP-ID": "ash_nazg",
+                "EX-APP-VERSION": self.app_version,
+                "AUTHORIZATION-APP-API": base64.b64encode(
+                    f":{self.token}".encode()
+                ).decode("ascii"),
+                "OCS-APIREQUEST": "true",
+            },
             json=payload,
         )
         if resp.status_code >= 400:

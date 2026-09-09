@@ -31,6 +31,12 @@ set -euo pipefail
 
 COMPOSE_FILE="${COMPOSE_FILE:-scripts/local-nextcloud-stack.yml}"
 NC_SVC="${NC_SVC:-nextcloud}"
+# The URL AppAPI hands to the daemon and the ExApp. It MUST point at
+# the reverse proxy, not at the NC container: AppAPI builds the ExApp
+# heartbeat/proxy URLs as <nextcloud_url>/exapps/<appid>/<path> and
+# expects /exapps/* to be routed to HaRP. Apache (http://nextcloud)
+# answers those with 404 and the ExApp never becomes reachable.
+NC_PROXY_URL="${NC_PROXY_URL:-http://caddy}"
 APP_ID="ash_nazg"
 APP_VERSION="0.0.0"
 DAEMON_NAME="harp"
@@ -76,12 +82,26 @@ while :; do
     sleep 3
 done
 
-log "checking HaRP /info endpoint …"
-if ! dc exec -T "${NC_SVC}" curl -fsS "http://appapi-harp:8780/info" >/dev/null 2>&1; then
-    warn "HaRP /info not reachable from NC yet — registration may fail"
-else
-    ok "HaRP reachable from NC"
-fi
+log "waiting for HaRP to answer on :8780 …"
+# HaRP has no /info route (v0.4.0); an unauthenticated request to the
+# ExApp frontend answers 401, which is proof enough that the daemon is
+# listening. It starts after Nextcloud is healthy, so give it a moment
+# rather than crying wolf on the first probe.
+harp_code=""
+harp_deadline=$(( $(date +%s) + 60 ))
+while :; do
+    harp_code="$(dc exec -T "${NC_SVC}" curl -sS -o /dev/null -m 5 \
+        -w '%{http_code}' "http://appapi-harp:8780/exapps/" 2>/dev/null || true)"
+    if [[ "${harp_code}" =~ ^(401|403|404)$ ]]; then
+        ok "HaRP answering on :8780 (HTTP ${harp_code} without credentials)"
+        break
+    fi
+    if (( $(date +%s) > harp_deadline )); then
+        warn "HaRP not answering on :8780 after 60 s (last: '${harp_code}') — registration may fail"
+        break
+    fi
+    sleep 3
+done
 
 # --- 1. install + enable app_api -------------------------------------------
 log "ensuring AppAPI is installed and enabled …"
@@ -107,7 +127,7 @@ else
         docker-install \
         http \
         "${HARP_HOST}" \
-        "http://${NC_SVC}" \
+        "${NC_PROXY_URL}" \
         --net "${NC_NET}" \
         --harp \
         --harp_frp_address "${HARP_FRP_ADDRESS}" \
@@ -122,14 +142,20 @@ if occ app_api:app:list 2>/dev/null | grep -q "${APP_ID} "; then
     ok "ExApp '${APP_ID}' already registered"
 else
     # Push the local host image to the local registry so HaRP can
-    # pull it through the AppAPI deploy flow. Skip if already tagged.
-    if ! docker manifest inspect 127.0.0.1:5000/ash-nazg-host:${APP_VERSION}-scaffold >/dev/null 2>&1; then
-        log "pushing host image to local registry …"
-        docker tag localhost/ash-nazg-host:${APP_VERSION}-scaffold \
-                   127.0.0.1:5000/ash-nazg-host:${APP_VERSION}-scaffold
-        docker push --tls-verify=false \
-                   127.0.0.1:5000/ash-nazg-host:${APP_VERSION}-scaffold
+    # pull it through the AppAPI deploy flow. Always push: the tag is
+    # mutable during development, and re-pushing an unchanged image
+    # only re-sends the manifest (the layers are already there).
+    log "pushing host image to local registry …"
+    docker tag localhost/ash-nazg-host:${APP_VERSION}-scaffold \
+               127.0.0.1:5000/ash-nazg-host:${APP_VERSION}-scaffold
+    # `--tls-verify=false` is a podman flag; the docker CLI rejects it
+    # and already treats 127.0.0.1:5000 as insecure.
+    push_flags=()
+    if docker --version 2>/dev/null | grep -qi podman; then
+        push_flags+=(--tls-verify=false)
     fi
+    docker push "${push_flags[@]}" \
+               127.0.0.1:5000/ash-nazg-host:${APP_VERSION}-scaffold
 
     # Patch info.xml in-flight so <registry> + <image> point at the
     # local registry rather than ghcr.io. Image ref from the host
@@ -184,16 +210,17 @@ fi
 cat <<EOF
 
 ─────────────────────────────────────────────────────────────────
-What works (wire-dosbox-engine §1 foundation):
+Working now:
   - http://localhost:8088              (admin / admin-local-dev)
   - http://localhost:8088/index.php/settings/admin/${APP_ID}
-  - HaRP daemon: docker exec scripts_appapi-harp_1 wget -qO- http://localhost:8780/info
+  - AppAPI proxy: http://localhost:8088/index.php/apps/app_api/proxy/${APP_ID}/health
   - Spawned ExApp: docker ps | grep ${APP_ID}
 
-What needs §6 (handshake) before it works:
-  - http://localhost:8088/index.php/apps/app_api/proxy/${APP_ID}/health
-  AppAPI's proxy is gated by route registration, which the host
-  shim's appapi.register() owns. While that's still
-  NotImplementedError this URL returns 404. Wiring §6 makes it 200.
+Known gap (see openspec/changes/wire-dosbox-engine/tasks.md):
+  - The 'deploy-daemon-spawn' self-check fails on a HaRP install.
+    The host shim spawns engine containers by shelling out to
+    'docker run', and an ExApp container has neither the docker CLI
+    nor a socket. HaRP exposes no spawn API to ExApps either. Which
+    way that goes is an open design decision.
 ─────────────────────────────────────────────────────────────────
 EOF

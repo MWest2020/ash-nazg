@@ -20,7 +20,6 @@ live NC, while the level-3 verifier exercises the real path.
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import os
 from collections.abc import AsyncIterator
@@ -28,8 +27,8 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Final
 
-from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse, PlainTextResponse
+from fastapi import BackgroundTasks, FastAPI, Request
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -101,7 +100,12 @@ def _make_dependencies() -> tuple[FileReader, SessionSpawner, AuditLogger]:
         user_id = os.environ.get("EX_APP_USER", "admin")
         token = os.environ["APP_SECRET"]
         reader = WebDavFileReader(base_url=nc_url, user_id=user_id, token=token)
-        audit = OcsAuditLogger(base_url=nc_url, user_id=user_id, token=token)
+        audit = OcsAuditLogger(
+            base_url=nc_url,
+            user_id=user_id,
+            token=token,
+            app_version=os.environ.get("APP_VERSION", VERSION),
+        )
         network = os.environ.get(DEFAULT_NETWORK_ENV)
         spawner = DockerSubprocessSpawner(
             network=network,
@@ -118,13 +122,17 @@ def _make_dependencies() -> tuple[FileReader, SessionSpawner, AuditLogger]:
     )
 
 
-async def _register_files_action_menu() -> None:
+async def _register_files_action_menu(
+    *, retries: int = 3, retry_delay_s: float = 2.0
+) -> None:
     """Register our right-click menu entry with AppAPI.
 
     In `ASH_NAZG_MODE=nextcloud` only — the demo bootstrap has no
-    AppAPI to talk to. Failure logs and continues (the host stays up
-    even if AppAPI is briefly unreachable; AppAPI re-polls heartbeats
-    and we re-register on next start).
+    AppAPI to talk to. Called from the `PUT /enabled` handler, because
+    AppAPI answers OCS calls from an ExApp with 401 until that ExApp is
+    enabled — so a few short retries are enough, where a startup-time
+    register needed minutes of them. Failure logs and continues (the
+    host stays up; AppAPI calls `/enabled` again on the next enable).
     """
     try:
         config = AppApiConfig.from_environment()
@@ -144,7 +152,9 @@ async def _register_files_action_menu() -> None:
     )
     client = AppApiClient(config)
     try:
-        await client.register_file_action(entry)
+        await client.register_file_action(
+            entry, retries=retries, retry_delay_s=retry_delay_s
+        )
     except Exception:
         logger.exception("FileActionsMenu registration failed — continuing anyway")
     finally:
@@ -170,22 +180,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         [r.engine.id for r in registry.all()],
     )
 
-    if _resolved_mode() == MODE_NEXTCLOUD:
-        # Don't block lifespan startup — the AppAPI register call
-        # may need to retry for several minutes until the ExApp is
-        # `enabled` in oc_ex_apps. The server has to start accepting
-        # heartbeats immediately or the bootstrap waits forever.
-        register_task = asyncio.create_task(_register_files_action_menu())
-    else:
-        register_task = None
-        logger.info(
-            "AppAPI env vars absent — skipping FileActionsMenu register (demo bootstrap)"
-        )
+    # The FileActionsMenu entry is registered from `PUT /enabled`, not
+    # here: AppAPI rejects OCS calls from an ExApp that is not yet
+    # enabled, and at lifespan time it never is.
 
     yield
-    # Cancel the in-flight register task if still retrying.
-    if register_task is not None and not register_task.done():
-        register_task.cancel()
     # Best-effort cleanup of HTTP adapters
     aclose = getattr(reader, "aclose", None)
     if callable(aclose):
@@ -221,9 +220,57 @@ async def health() -> dict[str, str]:
     return {"status": "ok", "app": APP_ID, "version": VERSION}
 
 
-@app.get("/heartbeat", tags=["liveness"], response_class=PlainTextResponse)
-async def heartbeat() -> str:
-    return "ok"
+@app.get("/heartbeat", tags=["liveness"])
+async def heartbeat() -> dict[str, str]:
+    """AppAPI's liveness probe.
+
+    The body matters, not just the status: AppAPI reads `status` and
+    logs "Failed heartbeat … status=200" for anything else, so a
+    plain-text `ok` leaves the ExApp stuck in registration forever.
+    """
+    return {"status": "ok"}
+
+
+async def _report_init_done() -> None:
+    """Tell AppAPI the ExApp finished initialising."""
+    try:
+        config = AppApiConfig.from_environment()
+    except KeyError:
+        logger.warning("AppAPI config env vars missing — skipping init-status report")
+        return
+    client = AppApiClient(config)
+    try:
+        await client.set_init_status(100)
+    except Exception:
+        logger.exception("init-status report failed")
+    finally:
+        await client.aclose()
+
+
+@app.post("/init", tags=["appapi"])
+async def appapi_init(background: BackgroundTasks) -> dict[str, str]:
+    """AppAPI's post-deploy init step.
+
+    There is nothing to download — the engine images are pulled per
+    session — so we report 100 % straight away, in the background so
+    this handler can answer immediately. Until that report lands,
+    `app:register --wait-finish` blocks.
+    """
+    background.add_task(_report_init_done)
+    return {}
+
+
+@app.put("/enabled", tags=["appapi"])
+async def appapi_enabled(enabled: int = 0) -> dict[str, str]:
+    """AppAPI enable/disable hook.
+
+    An empty `error` means "accepted". Enabling is also the first
+    moment AppAPI accepts OCS calls from us, so the Files right-click
+    entry is registered here.
+    """
+    if enabled:
+        await _register_files_action_menu()
+    return {"error": ""}
 
 
 class RunRequest(BaseModel):

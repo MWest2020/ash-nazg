@@ -32,6 +32,7 @@ from ash_nazg.appapi import AppApiConfig
 logger = logging.getLogger(__name__)
 
 FILE_ACTIONS_MENU_PATH: Final[str] = "/ocs/v2.php/apps/app_api/api/v2/ui/files-actions-menu"
+EX_APP_STATUS_PATH: Final[str] = "/ocs/v1.php/apps/app_api/ex-app/status"
 
 
 @dataclass(frozen=True)
@@ -79,6 +80,24 @@ class AppApiClient:
             "Content-Type": "application/json",
             "Accept": "application/json",
         }
+
+
+    async def set_init_status(self, progress: int, error: str = "") -> None:
+        """Report ExApp init progress to AppAPI.
+
+        AppAPI's `app:register --wait-finish` blocks until the ExApp
+        reports `progress: 100` here — an ExApp that never calls this
+        stays in "init" forever and the register command hangs. A
+        non-empty `error` marks the init as failed instead.
+        """
+        url = f"{self.config.nc_url.rstrip('/')}{EX_APP_STATUS_PATH}"
+        resp = await self._client.put(
+            url,
+            headers=self._ocs_headers(),
+            json={"progress": progress, "error": error},
+        )
+        resp.raise_for_status()
+        logger.info("reported init status progress=%d error=%r", progress, error)
 
     async def register_file_action(
         self,

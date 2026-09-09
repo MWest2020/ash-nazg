@@ -17,12 +17,14 @@ def test_health_returns_ok() -> None:
     assert body["app"] == "ash_nazg"
 
 
-def test_heartbeat_returns_plain_ok() -> None:
+def test_heartbeat_returns_status_ok_json() -> None:
+    """AppAPI parses this body; a bare `ok` string reads as a failed
+    heartbeat and the ExApp never finishes registering."""
     client = TestClient(app)
     response = client.get("/heartbeat")
 
     assert response.status_code == 200
-    assert response.text == "ok"
+    assert response.json() == {"status": "ok"}
 
 
 def test_selftest_returns_canonical_shape() -> None:

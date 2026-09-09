@@ -78,15 +78,33 @@ Runs only on tag pushes (`v*.*.*`) and manual workflow_dispatch.
 **Currently a placeholder** — the script logs a TODO and exits 0.
 The implementation lands in a follow-up change.
 
-When fully implemented, what it will cover:
+What it covers today (`scripts/verify-against-nextcloud.sh`, green
+on NC 32.0.14 + AppAPI 5.x + HaRP v0.4.0):
 
-- Spinning up an ephemeral Nextcloud (>= 30) + AppAPI + HaRP +
-  postgres + redis stack via docker compose.
+- Spinning up an ephemeral Nextcloud 32 + AppAPI + HaRP + postgres
+  + valkey + Caddy + a local registry via docker compose.
 - Registering Ash Nazg as an ExApp via
-  `occ app_api:app:register ash_nazg ...`.
-- HTTP-checking the host shim's `/health`, `/heartbeat`, and (once
-  wired) the admin settings page route.
-- Tearing the stack down on success or failure.
+  `occ app_api:app:register ash_nazg harp --wait-finish`, so HaRP
+  pulls the image from the registry and spawns the container.
+- Asserting the container exists, that `oc_ex_apps.port` equals the
+  `APP_PORT` HaRP injected (no SQL patch anywhere), and that
+  `/health`, `/admin/settings` and `/selftest` all answer **through
+  the AppAPI proxy**.
+- Asserting the self-test's three implementable checks pass and the
+  fourth (`deploy-daemon-spawn`) fails with a concrete message.
+- Tearing the stack down on success or failure (`KEEP_STACK=1`
+  leaves it up).
+
+Two requirements are easy to get wrong and are pinned by the
+verifier because they cost hours to rediscover:
+
+- `/heartbeat` must answer `{"status": "ok"}` as JSON. AppAPI reads
+  the body; a plain-text `ok` is logged as a *failed* heartbeat at
+  HTTP 200 and registration never finishes.
+- The deploy daemon's `nextcloud_url` must point at the reverse
+  proxy that routes `/exapps/*` to HaRP (`http://caddy` in the
+  stack), not at the Nextcloud container. Apache answers those
+  paths with 404.
 
 What it does **not** cover (even when fully implemented):
 

@@ -108,7 +108,10 @@ services:
       REDIS_HOST_PORT: 6379
       NEXTCLOUD_ADMIN_USER: admin
       NEXTCLOUD_ADMIN_PASSWORD: admin-local-dev
-      NEXTCLOUD_TRUSTED_DOMAINS: localhost 127.0.0.1
+      # `caddy` is in the list because AppAPI talks to NC through the
+      # proxy (see NC_PROXY_URL in bootstrap-nextcloud.sh); requests
+      # arrive with Host: caddy and an untrusted host is refused.
+      NEXTCLOUD_TRUSTED_DOMAINS: localhost 127.0.0.1 caddy
       OVERWRITEHOST: localhost:8088
       OVERWRITEPROTOCOL: http
     depends_on:
@@ -144,6 +147,18 @@ services:
       # Quieter than the default "warning" → "info" while
       # debugging; bump to "warning" once the stack is reliable.
       HP_LOG_LEVEL: info
+      # LOCAL DEV ONLY. HaRP's frps speaks mTLS by default and
+      # expects every ExApp to present the client cert it generates
+      # in /certs/frp. It does not
+      # mount that directory into the ExApps it spawns (verified on
+      # v0.4.0), so an ExApp's frpc has no cert, dials plaintext, and
+      # the tunnel dies with "connect to server error: EOF". Turning
+      # TLS off on both ends is the coherent local-dev pairing —
+      # upstream's own start.sh writes `transport.tls.enable = false`
+      # when /certs/frp is absent. Everything stays on one docker
+      # network on one host. A production HaRP keeps TLS on and must
+      # get those certs to the ExApp.
+      HP_FRP_DISABLE_TLS: "true"
     ports:
       # 8780 = HTTP daemon endpoint AppAPI talks to.
       # 8782 = FRP server ExApp containers register with for

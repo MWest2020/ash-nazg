@@ -9,11 +9,10 @@
 # ash_nazg ExApp. Asserts the AppAPI proxy URL works and the
 # HaRP-spawned container is healthy. Tears down at the end.
 #
-# wire-dosbox-engine §1 STATUS: foundation complete (HaRP boots,
-# daemon registers, FRP tunnels the docker socket, AppAPI calls
-# deploy). Final deploy gated on §2 (image must be on a real
-# registry). Run with the host image already tagged on a registry
-# HaRP can reach.
+# The stack's local registry stands in for GHCR: the bootstrap
+# pushes the freshly-built host image there and rewrites info.xml's
+# <registry> to match, so HaRP exercises the same pull-and-spawn
+# path an App Store install would.
 #
 # In CI this runs on `v*.*.*` tag pushes and on `workflow_dispatch`.
 # Per `docs/testing.md`, this is the gate that must be green before
@@ -21,8 +20,9 @@
 #
 # Caveats:
 # - Requires a working Docker / Podman daemon socket reachable as
-#   `docker compose`. Rootless podman is fine; for HaRP-style
-#   deploy daemons (not used here) you'd need rootful.
+#   `docker compose`, AND reachable by HaRP: it spawns the ExApp
+#   container through that socket. Set DOCKER_SOCKET to point at it
+#   (auto-detected: rootful docker first, then rootless podman).
 # - Requires the local image `localhost/ash-nazg-host:0.0.0-scaffold`.
 #   The script builds it if missing.
 # - Defaults to `KEEP_STACK=0` (tear down on success). Set
@@ -41,10 +41,20 @@ err()  { printf '\033[31m!!\033[0m %s\n'  "$*" >&2; }
 
 cd "${REPO_ROOT}"
 
-# Local-dev workaround: HaRP's frpc needs to connect() the
-# rootless-podman socket. Default 0660 perms blocks container
-# access. Bump to 0666 for the duration; restore in cleanup.
-SOCKET_PATH="${SOCKET_PATH:-/run/user/$(id -u)/podman/podman.sock}"
+# HaRP needs a container-runtime socket to spawn the ExApp. Rootful
+# docker exposes /var/run/docker.sock (0660, root:docker — the user
+# running this script is in the docker group, and HaRP runs as root
+# inside its container, so no chmod is needed). Rootless podman needs
+# the 0660 socket relaxed to 0666 for the duration; that is what the
+# chmod dance below is for.
+DOCKER_SOCKET="${DOCKER_SOCKET:-$([[ -S /var/run/docker.sock ]] \
+    && echo /var/run/docker.sock \
+    || echo "/run/user/$(id -u)/podman/podman.sock")}"
+export DOCKER_SOCKET
+SOCKET_PATH="${SOCKET_PATH:-${DOCKER_SOCKET}}"
+if [[ "${SOCKET_PATH}" == "/var/run/docker.sock" ]]; then
+    SOCKET_PATH=""   # rootful docker: leave the socket alone
+fi
 SOCKET_PERMS_BEFORE=""
 if [[ -S "${SOCKET_PATH}" ]]; then
     SOCKET_PERMS_BEFORE="$(stat -c '%a' "${SOCKET_PATH}")"
@@ -99,20 +109,52 @@ if ! ./scripts/bootstrap-nextcloud.sh; then
 fi
 ok "bootstrap succeeded"
 
-# --- 4. assert reachability ------------------------------------------------
-log "asserting NC can reach the host shim's /health …"
-body="$(docker compose -f "${COMPOSE_FILE}" exec -T nextcloud \
-    curl -fsS http://ash-nazg-host:8080/health 2>/dev/null || true)"
-if echo "${body}" | grep -q '"app":"ash_nazg"'; then
-    ok "  GET /health returned the canonical scaffold response"
+# --- 4. assert the deployment is real --------------------------------------
+PROXY="${PROXY:-http://localhost:8088/index.php/apps/app_api/proxy/ash_nazg}"
+NC_AUTH="${NC_AUTH:-admin:admin-local-dev}"
+EXAPP_CONTAINER="${EXAPP_CONTAINER:-nc_app_ash_nazg}"
+
+log "asserting HaRP spawned the ExApp container …"
+spawned="$(docker ps --filter "name=${EXAPP_CONTAINER}" --format '{{.Names}}' | head -1)"
+if [[ "${spawned}" == "${EXAPP_CONTAINER}" ]]; then
+    ok "  ${EXAPP_CONTAINER} is running (spawned by HaRP, not by compose)"
 else
-    err "  /health did not return the expected body. Got: ${body}"
+    err "  no container named ${EXAPP_CONTAINER} — HaRP did not spawn the ExApp"
     exit 1
 fi
 
-log "asserting /admin/settings serves the HTML shell …"
-shell="$(docker compose -f "${COMPOSE_FILE}" exec -T nextcloud \
-    curl -fsS http://ash-nazg-host:8080/admin/settings 2>/dev/null || true)"
+log "asserting the bootstrap contains no oc_ex_apps port workaround …"
+if grep -qi "UPDATE oc_ex_apps" scripts/bootstrap-nextcloud.sh; then
+    err "  bootstrap still patches oc_ex_apps by SQL — HaRP allocates the port"
+    exit 1
+fi
+ok "  no SQL port patch in the bootstrap"
+
+log "asserting oc_ex_apps.port matches the port AppAPI gave the container …"
+db_port="$(docker compose -f "${COMPOSE_FILE}" exec -T postgres \
+    psql -U nextcloud -d nextcloud -tAc \
+    "select port from oc_ex_apps where appid = 'ash_nazg'" 2>/dev/null | tr -d '[:space:]')"
+env_port="$(docker inspect "${EXAPP_CONTAINER}" \
+    --format '{{range .Config.Env}}{{println .}}{{end}}' \
+    | sed -n 's/^APP_PORT=//p' | tr -d '[:space:]')"
+if [[ -n "${db_port}" && "${db_port}" == "${env_port}" ]]; then
+    ok "  oc_ex_apps.port = ${db_port} = the container's APP_PORT"
+else
+    err "  port mismatch: oc_ex_apps.port='${db_port}' APP_PORT='${env_port}'"
+    exit 1
+fi
+
+log "asserting /health through the AppAPI proxy …"
+body="$(curl -fsS -u "${NC_AUTH}" "${PROXY}/health" 2>/dev/null || true)"
+if echo "${body}" | grep -q '"app":"ash_nazg"'; then
+    ok "  proxy GET /health returned the canonical response (route registration works)"
+else
+    err "  proxy /health did not return the expected body. Got: ${body}"
+    exit 1
+fi
+
+log "asserting /admin/settings serves the HTML shell through the proxy …"
+shell="$(curl -fsS -u "${NC_AUTH}" "${PROXY}/admin/settings" 2>/dev/null || true)"
 if echo "${shell}" | grep -q 'id="ash-nazg-admin-settings"'; then
     ok "  admin settings shell renders, mount target present"
 else
@@ -120,9 +162,8 @@ else
     exit 1
 fi
 
-log "asserting /selftest returns the canonical 4-check skipped JSON …"
-selftest="$(docker compose -f "${COMPOSE_FILE}" exec -T nextcloud \
-    curl -fsS -X POST http://ash-nazg-host:8080/selftest 2>/dev/null || true)"
+log "asserting /selftest runs real checks through the proxy …"
+selftest="$(curl -fsS -u "${NC_AUTH}" -X POST "${PROXY}/selftest" 2>/dev/null || true)"
 for cid in host-health engines-registered deploy-daemon-spawn audit-log-write; do
     if ! echo "${selftest}" | grep -q "\"id\":\"${cid}\""; then
         err "  /selftest missing check id: ${cid}"
@@ -131,21 +172,47 @@ for cid in host-health engines-registered deploy-daemon-spawn audit-log-write; d
 done
 ok "  /selftest returns all four canonical check IDs in spec order"
 
+# The three checks that must pass on a healthy install. `deploy-daemon-spawn`
+# is deliberately excluded: on a HaRP install the host shim has no way to
+# spawn a sibling container (no docker CLI, no socket, and HaRP exposes no
+# spawn API to ExApps). That is an open design decision, tracked in
+# openspec/changes/wire-dosbox-engine/tasks.md — until it is made, this
+# verifier pins the check as failing *with a real message* rather than
+# pretending it passes.
+for cid in host-health engines-registered audit-log-write; do
+    if ! echo "${selftest}" | grep -q "\"id\":\"${cid}\",\"status\":\"ok\""; then
+        err "  /selftest check '${cid}' is not ok: ${selftest}"
+        exit 1
+    fi
+done
+ok "  host-health, engines-registered and audit-log-write all pass"
+
+if echo "${selftest}" | grep -q '"id":"deploy-daemon-spawn","status":"fail","message":"[^"]\+"'; then
+    ok "  deploy-daemon-spawn fails with a concrete message (known gap)"
+else
+    err "  deploy-daemon-spawn changed shape — update this verifier: ${selftest}"
+    exit 1
+fi
+
 # --- 5. report -------------------------------------------------------------
 echo
 ok "level-3 verification PASSED"
 cat <<'EOF'
 
 What this proves:
-  - The Ash Nazg manifest is accepted by AppAPI on Nextcloud 30.
-  - The host shim is reachable from inside Nextcloud over the
-    compose network (this is the "App Store install would succeed"
-    smoke).
-  - All scaffold-scope HTTP contracts hold against a real NC stack.
+  - The manifest is accepted by AppAPI on Nextcloud 32 and the
+    ExApp deploys through HaRP's docker-install path — HaRP pulls
+    the image, spawns the container and allocates the port, with
+    no SQL workaround anywhere.
+  - The ExApp completes AppAPI's lifecycle handshake (heartbeat →
+    init → enabled) and answers through the AppAPI proxy, which is
+    the "App Store install would succeed" smoke.
+  - The self-test's three implementable checks pass against a real
+    NC stack, including an audit write that AppAPI accepts.
 
 What this still does NOT prove:
   - End-to-end Run flow (clicking the file action and seeing
-    DOSBox-X start). That is the scope of `wire-dosbox-engine`.
+    DOSBox-X start) — blocked on the engine-spawn design decision.
   - KasmVNC streaming through AppAPI's proxy. That is the scope
     of `streaming-proxy`.
 EOF

@@ -10,13 +10,20 @@ last_reviewed: 2026-07-13
 > are written from the design docs, not from a verified install.
 > Expect minor inaccuracies until that change lands; treat this
 > as a sketch, not a procedure.
+>
+> What *is* verified (wire-dosbox-engine, on NC 32.0.14 + AppAPI 5.x
+> + HaRP v0.4.0): the deploy path — image pull, HaRP-spawned
+> container, port allocation, the heartbeat/init/enabled handshake,
+> and reaching the app through the AppAPI proxy. Running a binary is
+> not: see the engine-spawn gap in that change's tasks.
 
 ## Requirements
 
 | Component         | Minimum  | Notes                                                                                  |
 |-------------------|----------|----------------------------------------------------------------------------------------|
-| Nextcloud         | 30       | AppAPI 5.x is GA from Nextcloud 30; earlier versions are NOT supported.               |
+| Nextcloud         | 32       | Verified against 32.0.14 with AppAPI 5.x. NC 30 was the scaffold's first target and is no longer supported. |
 | AppAPI            | 5.x      | Install from the App Store before installing Ash Nazg.                                |
+| HaRP FRP tunnel   | on       | The ExApp opens an FRP tunnel back to HaRP; the image ships `frpc` for it.            |
 | Deploy daemon     | **HaRP** | DSP is **not** supported. Streaming uses websockets, which DSP does not proxy reliably. |
 | Container runtime | Docker (or compatible) | Required by HaRP.                                                       |
 | Architecture      | linux/amd64 or linux/arm64 | Both host and engine images are multi-arch.                          |
