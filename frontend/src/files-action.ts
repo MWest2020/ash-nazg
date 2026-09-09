@@ -102,8 +102,8 @@ const action: IFileAction = {
 			// Surface what the host said — 415 for an unsupported format,
 			// 409 for a file already running, and so on. Never "something
 			// went wrong".
-			const detail =
-				(error as { response?: { data?: { message?: string } } })?.response
+			const detail
+				= (error as { response?: { data?: { message?: string } } })?.response
 					?.data?.message ?? String(error)
 			showError(t(APP_ID, 'Could not start the session: {detail}', { detail }))
 			return false

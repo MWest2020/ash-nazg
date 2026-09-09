@@ -20,6 +20,7 @@ import NcButton from '@nextcloud/vue/components/NcButton'
 import NcNoteCard from '@nextcloud/vue/components/NcNoteCard'
 
 const APP_ID = 'ash_nazg'
+const ENGINE_NAME = 'dosbox-x'
 
 const sessionId = ref<string>(
 	document.getElementById('ash-nazg-session')?.dataset.sessionId ?? '',
@@ -27,10 +28,18 @@ const sessionId = ref<string>(
 const closed = ref<boolean>(false)
 const closing = ref<boolean>(false)
 
+/**
+ * Build a URL to one of the app's own routes through the AppAPI proxy.
+ *
+ * @param path route path on the app, e.g. `/sessions/abc`
+ */
 function proxyUrl(path: string): string {
 	return generateUrl(`/apps/app_api/proxy/${APP_ID}${path}`)
 }
 
+/**
+ * End this session and say what the host answered if it refuses.
+ */
 async function closeSession(): Promise<void> {
 	closing.value = true
 	try {
@@ -39,8 +48,8 @@ async function closeSession(): Promise<void> {
 		showSuccess(t(APP_ID, 'Session closed.'))
 	} catch (error) {
 		// Show what the host actually said; "something went wrong" helps nobody.
-		const detail =
-			(error as { response?: { data?: { message?: string } } })?.response?.data
+		const detail
+			= (error as { response?: { data?: { message?: string } } })?.response?.data
 				?.message ?? String(error)
 		showError(t(APP_ID, 'Could not close the session: {detail}', { detail }))
 	} finally {
@@ -64,7 +73,7 @@ async function closeSession(): Promise<void> {
 			<dt>{{ t(APP_ID, 'Session') }}</dt>
 			<dd><code>{{ sessionId }}</code></dd>
 			<dt>{{ t(APP_ID, 'Engine') }}</dt>
-			<dd>dosbox-x</dd>
+			<dd>{{ ENGINE_NAME }}</dd>
 		</dl>
 
 		<NcNoteCard type="warning">
