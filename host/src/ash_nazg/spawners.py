@@ -9,12 +9,12 @@ Two implementations:
   frontend can navigate to without first having to wire the docker
   socket. Marked clearly as a demo-mode shortcut.
 
-- `DockerSubprocessSpawner` — spawns a fresh engine container per
-  session via `docker run`. Wires the spawned container onto the
-  compose network and writes the AppAPI-issued per-session token in.
-  Production-shaped but still constrained to the local docker /
-  podman socket; the AppAPI-bridged spawner replaces it once
-  upstream AppAPI exposes a per-session spawn endpoint.
+- `InImageSpawner` — runs the engine as a child process of this
+  container, one process tree per session. An earlier
+  `DockerSubprocessSpawner` shelled out to `docker run`; it is gone,
+  because an ExApp container has no docker CLI, no socket, and HaRP
+  offers ExApps no spawn API. See wire-dosbox-engine's "Open
+  ontwerpbesluit" for the routes back to container-level isolation.
 
 Both implement the `SessionSpawner` Protocol from `dispatch.py`.
 """
@@ -24,8 +24,11 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-import shlex
-from typing import Final
+import shutil
+import socket
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, Final
 
 from ash_nazg.dispatch import SessionHandle
 from ash_nazg.engines import FileMeta, SessionConfig
@@ -76,160 +79,6 @@ class StubSpawner:
         return True, f"stub spawner ready → {self.host}:{self.port} (demo mode)"
 
 
-# --- Docker subprocess -------------------------------------------------------
-
-
-_DEFAULT_DOCKER_BIN: Final[str] = "docker"
-
-
-class DockerSubprocessSpawner:
-    """Spawns engine containers by shelling out to `docker run`.
-
-    Resource limits, read-only root, tmpfs for /tmp, network attach, and
-    env-var injection are encoded as run flags per the sandbox spec.
-    The container is detached; the spawner reads the container id from
-    stdout and resolves the host:port the engine listens on.
-
-    The `network` param is the docker network the engine container must
-    join so the Nextcloud container can reach it. In demo mode this is
-    the compose network created by `scripts/local-nextcloud-stack.yml`;
-    in production it's the AppAPI proxy network.
-    """
-
-    def __init__(
-        self,
-        *,
-        docker_bin: str = _DEFAULT_DOCKER_BIN,
-        network: str | None = None,
-        extra_env: dict[str, str] | None = None,
-        container_label_app: str = "ash-nazg",
-    ) -> None:
-        self.docker_bin = docker_bin
-        self.network = network
-        self.extra_env = extra_env or {}
-        self.container_label_app = container_label_app
-
-    async def preflight(self) -> tuple[bool, str]:
-        """Probe the deploy daemon (docker/podman socket) without spawning.
-
-        Runs `<docker_bin> version` with a short timeout; a zero exit means
-        the socket is reachable. Returns (False, real error) otherwise — the
-        self-test surfaces that verbatim rather than vague text.
-        """
-        try:
-            proc = await asyncio.create_subprocess_exec(
-                self.docker_bin, "version", "--format", "{{.Server.Version}}",
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=5.0)
-        except FileNotFoundError:
-            return False, f"{self.docker_bin} binary not found on PATH"
-        except TimeoutError:
-            return False, f"{self.docker_bin} version timed out after 5s"
-        if proc.returncode != 0:
-            return False, (
-                f"{self.docker_bin} daemon unreachable "
-                f"(exit {proc.returncode}): {stderr.decode(errors='replace').strip()}"
-            )
-        return True, f"{self.docker_bin} daemon reachable (server {stdout.decode().strip()})"
-
-    async def spawn(
-        self,
-        *,
-        session_id: str,
-        config: SessionConfig,
-        file_meta: FileMeta,
-        user_id: str,
-    ) -> SessionHandle:
-        argv = self._build_argv(
-            session_id=session_id,
-            config=config,
-            file_meta=file_meta,
-            user_id=user_id,
-        )
-        logger.debug("spawn argv: %s", shlex.join(argv))
-        proc = await asyncio.create_subprocess_exec(
-            *argv,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        stdout, stderr = await proc.communicate()
-        if proc.returncode != 0:
-            raise RuntimeError(
-                f"docker run failed (exit {proc.returncode}): "
-                f"{stderr.decode(errors='replace').strip()}"
-            )
-        container_id = stdout.decode().strip()
-        if not container_id:
-            raise RuntimeError("docker run returned empty container id")
-
-        # Engine reachable via container DNS name on the shared network.
-        # KasmVNC listens on streaming_port inside the container.
-        return SessionHandle(
-            session_id=session_id,
-            container_id=container_id,
-            host=container_id[:12],  # short id == DNS name on podman bridge
-            port=config.streaming_port,
-        )
-
-    def _build_argv(
-        self,
-        *,
-        session_id: str,
-        config: SessionConfig,
-        file_meta: FileMeta,
-        user_id: str,
-    ) -> list[str]:
-        memory = f"{config.memory_limit_mb}m"
-        cpus = str(config.cpu_limit)
-        container_name = f"ash-nazg-{session_id[:12]}"
-
-        argv: list[str] = [
-            self.docker_bin,
-            "run",
-            "-d",
-            "--rm",
-            "--name",
-            container_name,
-            "--label",
-            f"app={self.container_label_app}",
-            "--label",
-            f"session_id={session_id}",
-            "--label",
-            f"user_id={user_id}",
-            "--cpus",
-            cpus,
-            "--memory",
-            memory,
-            "--memory-swap",
-            memory,  # sandbox spec: no swap allowance
-            "--read-only",
-            "--tmpfs",
-            "/tmp:rw,size=256m",  # noqa: S108 — docker tmpfs spec, not a host path
-            "--security-opt",
-            "label=disable",  # SELinux interop for bind mounts
-        ]
-
-        if self.network:
-            argv.extend(["--network", self.network])
-
-        # Per-session env: file path inside the engine, plus the AppAPI
-        # token davfs2 will use. The engine entrypoint reads FILE_PATH;
-        # NEXTCLOUD_URL + APP_TOKEN are mount-time inputs.
-        if len(config.entrypoint_args) >= 2:
-            inside_path = config.entrypoint_args[1]
-        else:
-            inside_path = file_meta.path
-        argv.extend(["-e", f"FILE_PATH={inside_path}"])
-        argv.extend(["-e", f"NC_USER_ID={user_id}"])
-        for key, value in self.extra_env.items():
-            argv.extend(["-e", f"{key}={value}"])
-
-        argv.append(config.image)
-        return argv
-
-
 def stub_spawner_from_env() -> StubSpawner:
     """Build a StubSpawner from `ASH_NAZG_DEMO_HOST` / `ASH_NAZG_DEMO_PORT`.
 
@@ -239,3 +88,238 @@ def stub_spawner_from_env() -> StubSpawner:
     host = os.environ.get("ASH_NAZG_DEMO_HOST", "127.0.0.1")
     port = int(os.environ.get("ASH_NAZG_DEMO_PORT", "16901"))
     return StubSpawner(host=host, port=port)
+
+
+# --- In-image sessions -------------------------------------------------------
+
+
+@dataclass
+class _RunningSession:
+    """One engine process tree started by `InImageSpawner`."""
+
+    session_id: str
+    process: asyncio.subprocess.Process
+    display: int
+    port: int
+    directory: Path
+
+
+class InImageSpawner:
+    """Runs the engine inside this container, as a child process.
+
+    The decision behind this (wire-dosbox-engine, "Open ontwerpbesluit"):
+    an ExApp container cannot spawn a sibling container. It has no docker
+    CLI, no socket, and HaRP exposes no spawn API to ExApps. So the
+    emulator ships in the same image as the shim and a session is a
+    process tree, not a container.
+
+    What that costs, stated plainly because the sandbox spec used to
+    promise otherwise: there are no cgroup limits on a session, the
+    root filesystem is not read-only, and a session runs under the same
+    uid as the shim — so the emulator process can read the shim's
+    environment, including APP_SECRET. The isolation that remains is
+    DOSBox-X itself: the untrusted binary is a DOS program inside an
+    emulator, never native code on this host. Per-engine ExApps are the
+    route back to container-level isolation.
+
+    What is enforced here: one process tree per session (never reused),
+    a private directory per session, a cap on concurrent sessions, a
+    lower scheduling priority than the shim, and termination on max
+    duration and on host shutdown.
+    """
+
+    def __init__(
+        self,
+        *,
+        file_reader: Any,
+        engine_script: str = "/usr/local/bin/ash-nazg-engine",
+        sessions_root: Path = Path("/tmp/ash-nazg-sessions"),  # noqa: S108
+        base_port: int = 6900,
+        first_display: int = 10,
+        max_sessions: int = 8,
+        readiness_timeout_s: float = 30.0,
+        max_duration_s: float = 4 * 60 * 60,
+        nice_increment: int = 10,
+    ) -> None:
+        self.file_reader = file_reader
+        self.engine_script = engine_script
+        self.sessions_root = sessions_root
+        self.base_port = base_port
+        self.first_display = first_display
+        self.max_sessions = max_sessions
+        self.readiness_timeout_s = readiness_timeout_s
+        self.max_duration_s = max_duration_s
+        self.nice_increment = nice_increment
+        self._sessions: dict[str, _RunningSession] = {}
+        self._slots: set[int] = set()
+
+    # --- lifecycle ---------------------------------------------------------
+
+    async def preflight(self) -> tuple[bool, str]:
+        """Check the engine can actually be started, without starting it."""
+        missing = [
+            name for name in ("dosbox-x", "kasmvncserver")
+            if shutil.which(name) is None
+        ]
+        if missing:
+            return False, f"engine binaries missing from the image: {', '.join(missing)}"
+        if not os.access(self.engine_script, os.X_OK):
+            return False, f"engine entrypoint {self.engine_script} is not executable"
+        free = self.max_sessions - len(self._slots)
+        return True, (
+            f"in-image engine ready (dosbox-x + kasmvncserver present, "
+            f"{free}/{self.max_sessions} session slots free)"
+        )
+
+    async def spawn(
+        self,
+        *,
+        session_id: str,
+        config: SessionConfig,
+        file_meta: FileMeta,
+        user_id: str,
+    ) -> SessionHandle:
+        slot = self._claim_slot()
+        # Modes are set explicitly, never left to the umask: under HaRP
+        # the shim runs with umask 0177 (so its unix socket comes out
+        # 0600), and a directory created under that umask has no execute
+        # bit — nothing can be written inside it, not even by its owner.
+        directory = self.sessions_root / session_id
+        self.sessions_root.mkdir(parents=True, exist_ok=True)
+        self.sessions_root.chmod(0o700)
+        directory.mkdir(exist_ok=True)
+        directory.chmod(0o700)
+
+        # The binary is downloaded, not mounted: no davfs2, no privileges,
+        # and the session cannot reach the rest of the user's Files.
+        local_path = directory / Path(file_meta.path).name
+        await self.file_reader.download_to(file_meta.path, local_path)
+
+        display = self.first_display + slot
+        port = self.base_port + slot
+        env = self._session_env(
+            display=display, port=port, local_path=local_path, directory=directory
+        )
+        log_path = directory / "engine.log"
+        with log_path.open("wb") as log:
+            process = await asyncio.create_subprocess_exec(
+                self.engine_script,
+                stdout=log,
+                stderr=asyncio.subprocess.STDOUT,
+                stdin=asyncio.subprocess.DEVNULL,
+                env=env,
+                cwd=str(directory),
+                preexec_fn=self._lower_priority,
+            )
+        session = _RunningSession(
+            session_id=session_id,
+            process=process,
+            display=display,
+            port=port,
+            directory=directory,
+        )
+        self._sessions[session_id] = session
+
+        try:
+            await self._await_port(port, process, log_path)
+        except Exception:
+            await self.terminate(session_id)
+            raise
+
+        logger.info(
+            "in-image session %s started: pid=%d display=:%d port=%d file=%s",
+            session_id, process.pid, display, port, file_meta.path,
+        )
+        return SessionHandle(
+            session_id=session_id,
+            container_id=f"pid-{process.pid}",
+            host=socket.gethostname(),
+            port=port,
+        )
+
+    async def terminate(self, session_id: str) -> None:
+        """SIGTERM, then SIGKILL after the grace period (sandbox spec)."""
+        session = self._sessions.pop(session_id, None)
+        if session is None:
+            return
+        self._slots.discard(session.display - self.first_display)
+        if session.process.returncode is None:
+            session.process.terminate()
+            try:
+                await asyncio.wait_for(session.process.wait(), timeout=_GRACE_SECONDS)
+            except TimeoutError:
+                logger.warning("session %s ignored SIGTERM; killing", session_id)
+                session.process.kill()
+                await session.process.wait()
+        shutil.rmtree(session.directory, ignore_errors=True)
+        logger.info("in-image session %s terminated", session_id)
+
+    async def terminate_all(self) -> None:
+        for session_id in list(self._sessions):
+            await self.terminate(session_id)
+
+    # --- internals ---------------------------------------------------------
+
+    def _claim_slot(self) -> int:
+        for slot in range(1, self.max_sessions + 1):
+            if slot not in self._slots:
+                self._slots.add(slot)
+                return slot
+        raise RuntimeError(
+            f"all {self.max_sessions} session slots are in use; "
+            "close a session before starting another"
+        )
+
+    def _session_env(
+        self, *, display: int, port: int, local_path: Path, directory: Path
+    ) -> dict[str, str]:
+        # A deliberately small environment: the shim's own variables
+        # (APP_SECRET above all) have no business in an engine session.
+        # This is hygiene, not a boundary — same uid, same /proc.
+        return {
+            "PATH": os.environ.get("PATH", "/usr/local/bin:/usr/bin:/bin"),
+            "HOME": os.environ.get("HOME", "/home/app"),
+            "LANG": os.environ.get("LANG", "C.UTF-8"),
+            "FILE_PATH": str(local_path),
+            "VNC_DISPLAY": f":{display}",
+            "VNC_WEBSOCKET_PORT": str(port),
+            "XSTARTUP_PATH": str(directory / "xstartup"),
+        }
+
+    def _lower_priority(self) -> None:
+        """Runs in the child between fork and exec."""
+        os.nice(self.nice_increment)
+
+    async def _await_port(
+        self, port: int, process: asyncio.subprocess.Process, log_path: Path
+    ) -> None:
+        """Wait until KasmVNC accepts connections, or explain why it never did."""
+        deadline = asyncio.get_running_loop().time() + self.readiness_timeout_s
+        while asyncio.get_running_loop().time() < deadline:
+            if process.returncode is not None:
+                raise RuntimeError(
+                    f"engine exited with code {process.returncode} before "
+                    f"listening on port {port}: {_tail(log_path)}"
+                )
+            try:
+                _, writer = await asyncio.open_connection("127.0.0.1", port)
+            except OSError:
+                await asyncio.sleep(0.5)
+                continue
+            writer.close()
+            await writer.wait_closed()
+            return
+        raise RuntimeError(
+            f"engine did not listen on port {port} within "
+            f"{self.readiness_timeout_s:.0f}s: {_tail(log_path)}"
+        )
+
+
+_GRACE_SECONDS: Final[float] = 30.0
+
+
+def _tail(path: Path, limit: int = 400) -> str:
+    try:
+        return path.read_text(errors="replace")[-limit:].strip() or "(engine log empty)"
+    except OSError:
+        return "(no engine log)"

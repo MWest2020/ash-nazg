@@ -8,8 +8,9 @@ scaffold (frontend binds against it); this change swaps each
 
 - host-health         — dispatcher + engine registry are wired.
 - engines-registered  — at least one engine is enabled.
-- deploy-daemon-spawn — the session spawner passes its preflight
-                        (docker/podman socket reachable, or stub ready).
+- engine-runtime      — the session spawner passes its preflight (the
+                        emulator and VNC server are in this image and a
+                        session slot is free, or the stub is ready).
 - audit-log-write     — a probe entry writes to the audit log.
 
 Each failing check carries an actual error message, never vague
@@ -36,7 +37,7 @@ OverallStatus = Literal["ok", "fail", "skipped"]
 CHECK_IDS: Final[tuple[str, ...]] = (
     "host-health",
     "engines-registered",
-    "deploy-daemon-spawn",
+    "engine-runtime",
     "audit-log-write",
 )
 
@@ -86,7 +87,7 @@ def _check_engines_registered(dispatcher: object) -> CheckResult:
 
 
 async def _check_deploy_daemon_spawn(dispatcher: object) -> CheckResult:
-    cid = "deploy-daemon-spawn"
+    cid = "engine-runtime"
     spawner = getattr(dispatcher, "spawner", None)
     if spawner is None:
         return _fail(cid, "no session spawner wired")

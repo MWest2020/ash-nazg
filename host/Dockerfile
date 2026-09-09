@@ -7,12 +7,20 @@
 #
 #   docker build -t ash-nazg-host -f host/Dockerfile .
 #
-# Three stages:
+# Four stages:
 #   1. frontend-build — Node 22, runs `npm ci --ignore-scripts &&
 #      npm run build`. Vite writes the bundle to `host/static/` per
 #      `frontend/vite.config.ts`.
-#   2. python-build   — Python 3.12, runs `uv sync --frozen --no-dev`.
-#   3. runtime        — slim Python image, non-root user, uvicorn.
+#   2. python-build   — Ubuntu 24.04 + uv, runs `uv sync --frozen --no-dev`.
+#   3. frpc-build     — fetches the pinned HaRP tunnel client.
+#   4. runtime        — Ubuntu 24.04: the shim AND the engine.
+#
+# Why Ubuntu and not python:3.12-slim: since the engine-in-image
+# decision the runtime carries dosbox-x and KasmVNC alongside uvicorn.
+# `dosbox-x` is packaged in Ubuntu universe and not in Debian (which
+# only has the older `dosbox`), and KasmVNC ships matching `noble`
+# .debs. The venv is therefore built on the same base it runs on, so
+# its interpreter path (/usr/bin/python3) resolves in both stages.
 #
 # Each stage starts fresh; layer caching keeps repeat builds quick
 # when only one tier changes.
@@ -40,12 +48,20 @@ RUN npm run build
 
 
 # --- Stage 2: python venv with uv ------------------------------------------
-FROM python:3.12-slim-bookworm AS python-build
+FROM ubuntu:24.04 AS python-build
+
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        ca-certificates python3.12 python3.12-venv python3-pip \
+    && rm -rf /var/lib/apt/lists/*
 
 # `pip install uv` is the documented uv bootstrap path. Pinned for
-# reproducibility.
+# reproducibility. --break-system-packages because this throwaway build
+# stage IS the environment uv then manages (PEP 668 guards interactive
+# systems, not a single-purpose image layer).
 ENV UV_VERSION=0.5.6
-RUN pip install --no-cache-dir "uv==${UV_VERSION}"
+RUN pip install --no-cache-dir --break-system-packages "uv==${UV_VERSION}"
 
 WORKDIR /app
 
@@ -82,16 +98,64 @@ RUN set -ex; \
     rm -rf /tmp/frp_${FRP_VERSION}_linux_${FRP_ARCH} /tmp/frp.tar.gz
 
 
-# --- Stage 3: runtime ------------------------------------------------------
-FROM python:3.12-slim-bookworm AS runtime
+# --- Stage 4: runtime — the shim and the engine -----------------------------
+FROM ubuntu:24.04 AS runtime
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# KASMVNC_VERSION must match an upstream GitHub release tag of
+# https://github.com/kasmtech/KasmVNC. Verified 2026-05-09: v1.4.0 ships
+# kasmvncserver_noble_1.4.0_{amd64,arm64}.deb.
+ARG KASMVNC_VERSION=1.4.0
+ARG TARGETARCH
+
+# python3 (24.04 = 3.12) runs the shim — the venv's console scripts
+# resolve /usr/bin/python3, so the bare `python3.12` package is not
+# enough on its own; dosbox-x + KasmVNC run the sessions; curl is
+# the HaRP-aware healthcheck's only way to probe a unix socket; tini reaps
+# the session processes the shim spawns. No davfs2: an in-image session
+# gets its binary as a plain download into a per-session directory, so
+# there is no mount and no privilege to ask for.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        curl \
+        dosbox-x \
+        openssl \
+        python3 \
+        tini \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN set -eux; \
+    case "${TARGETARCH:-amd64}" in \
+        amd64) deb_arch=amd64 ;; \
+        arm64) deb_arch=arm64 ;; \
+        *) echo "Unsupported TARGETARCH: ${TARGETARCH}" >&2; exit 1 ;; \
+    esac; \
+    url="https://github.com/kasmtech/KasmVNC/releases/download/v${KASMVNC_VERSION}/kasmvncserver_noble_${KASMVNC_VERSION}_${deb_arch}.deb"; \
+    curl -fsSL "${url}" -o /tmp/kasmvnc.deb; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends /tmp/kasmvnc.deb; \
+    rm -f /tmp/kasmvnc.deb; \
+    rm -rf /var/lib/apt/lists/*
+
+# KasmVNC loads the snakeoil cert at startup even with SSL disabled in
+# the config. Generate a self-signed pair and make the key readable by
+# the non-root user. DEMO-MODE only; production terminates TLS at the
+# AppAPI proxy.
+RUN openssl req -x509 -newkey rsa:2048 -nodes -days 365 \
+        -keyout /etc/ssl/private/ssl-cert-snakeoil.key \
+        -out /etc/ssl/certs/ssl-cert-snakeoil.pem \
+        -subj '/CN=ash-nazg-local-dev' \
+    && chmod 755 /etc/ssl/private \
+    && chmod 644 /etc/ssl/private/ssl-cert-snakeoil.key
 
 # Non-root user. UID/GID are fixed so volume mounts stay predictable.
-# curl is the HaRP-aware healthcheck's only way to probe a unix socket.
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends curl \
-    && rm -rf /var/lib/apt/lists/* \
+# Ubuntu 24.04 ships a default `ubuntu` user at 1000; remove it first.
+# The engine needs a real home: KasmVNC keeps its per-display state there.
+RUN userdel -r ubuntu 2>/dev/null || true \
     && groupadd --system --gid 1000 app \
-    && useradd --system --uid 1000 --gid app --no-create-home --shell /usr/sbin/nologin app
+    && useradd --system --uid 1000 --gid app --create-home --shell /bin/bash app
 
 WORKDIR /app
 
@@ -105,7 +169,21 @@ COPY l10n/             /app/l10n/
 COPY appinfo/info.xml  /app/appinfo/info.xml
 COPY --from=frpc-build /usr/local/bin/frpc /usr/local/bin/frpc
 COPY host/start.sh     /start.sh
-RUN chmod +x /start.sh
+# The engine entrypoint is the same script the standalone engine image
+# uses; the shim runs it per session with FILE_PATH, VNC_DISPLAY and
+# VNC_WEBSOCKET_PORT set.
+COPY engines/dosbox-x/entrypoint.sh /usr/local/bin/ash-nazg-engine
+RUN chmod +x /start.sh /usr/local/bin/ash-nazg-engine
+
+# Pre-create the KasmVNC password file the first-run wizard would
+# otherwise prompt for (it deadlocks without a TTY), and the sentinel
+# that skips the desktop-environment question.
+USER app
+RUN mkdir -p /home/app/.vnc /home/app/.local/share \
+    && printf 'ash_nazg\nash_nazg\n\n' \
+        | kasmvncpasswd -u demo -wo /home/app/.kasmpasswd \
+    && touch /home/app/.vnc/.de-was-selected
+USER root
 
 ENV PATH="/app/.venv/bin:${PATH}" \
     PYTHONDONTWRITEBYTECODE=1 \
@@ -116,7 +194,10 @@ ENV PATH="/app/.venv/bin:${PATH}" \
 
 USER app
 
-EXPOSE 8080
+# 8080: the shim (AppAPI overrides it with APP_PORT).
+# 6901+: one KasmVNC websocket per in-image session, handed out by the
+# spawner. Only reachable through the AppAPI proxy in a real install.
+EXPOSE 8080 6901-6910
 
 # Liveness independent of AppAPI's /heartbeat handshake, so an
 # orchestrator can probe the container even before AppAPI registration.
@@ -138,5 +219,7 @@ HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
 # binds the unix socket start.sh tunnels (umask 0177 → 0600) instead of
 # a TCP port. Without HP_SHARED_KEY (manual-install / docker-socket-
 # proxy) start.sh is a pass-through and uvicorn binds TCP as before.
-ENTRYPOINT ["/start.sh"]
+# tini reaps the session processes the shim spawns; start.sh then
+# brings up frpc (HaRP mode) and execs uvicorn.
+ENTRYPOINT ["/usr/bin/tini", "--", "/start.sh"]
 CMD ["sh", "-c", "if [ -n \"$HP_SHARED_KEY\" ]; then umask 0177; exec uvicorn ash_nazg.main:app --uds /tmp/exapp.sock; else exec uvicorn ash_nazg.main:app --host 0.0.0.0 --port ${APP_PORT:-8080}; fi"]

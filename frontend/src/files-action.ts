@@ -2,13 +2,12 @@
  * Ash Nazg — Files action registration.
  *
  * Registers a "Run with Ash Nazg" right-click action on Files entries.
- * Per task §12.4: enabled predicate checks admin + extension + size;
- * exec emits an event on @nextcloud/event-bus and shows a toast.
+ * The enabled predicate checks admin + extension + size; exec starts
+ * a session and navigates to it.
  *
- * SCAFFOLD: the actual run flow (calling host /run, opening the iframe
- * host) lands in the `wire-dosbox-engine` change. This file only sets
- * up the action surface so the wiring change has a stable place to
- * hook into.
+ * exec POSTs to the host's /run through the AppAPI proxy and navigates
+ * to the session page. The stream itself is not on that page yet —
+ * `streaming-proxy` routes KasmVNC through the proxy.
  *
  * API note (@nextcloud/files 4.x): `registerFileAction` takes a plain
  * object matching the `IFileAction` interface. There is no `FileAction`
@@ -23,9 +22,10 @@ import {
 	type INode,
 } from '@nextcloud/files'
 import { getCurrentUser } from '@nextcloud/auth'
-import { showInfo } from '@nextcloud/dialogs'
-import { emit } from '@nextcloud/event-bus'
+import axios from '@nextcloud/axios'
+import { showError } from '@nextcloud/dialogs'
 import { translate as t } from '@nextcloud/l10n'
+import { generateUrl } from '@nextcloud/router'
 
 const APP_ID = 'ash_nazg'
 
@@ -87,24 +87,27 @@ const action: IFileAction = {
 			return false
 		}
 
-		// MVP DEMO MODE — opens the always-on DOSBox-X engine
-		// container's KasmVNC web client in a new browser tab.
-		// The host shim's /run dispatcher (real per-session
-		// spawn via HaRP, file mount via WebDAV) lands in a
-		// later iteration of wire-dosbox-engine.
-		const demoUrl = 'https://localhost:16901/vnc.html'
-		emit('ash_nazg:run-requested', { path: node.path })
-
-		showInfo(
-			t(
-				APP_ID,
-				'Opening DOSBox-X — accept the self-signed cert, then log in (demo / ash_nazg).',
-			),
-		)
-		// Small delay so the toast is readable before the new tab grabs focus.
-		window.setTimeout(() => {
-			window.open(demoUrl, '_blank', 'noopener,noreferrer')
-		}, 800)
+		// The host dispatches on the file's magic bytes, picks an engine
+		// and starts a session; it answers only once the session's VNC
+		// server accepts connections, so a 200 here means "running".
+		try {
+			const { data } = await axios.post(
+				generateUrl(`/apps/app_api/proxy/${APP_ID}/run`),
+				{ path: node.path },
+			)
+			window.location.href = generateUrl(
+				`/apps/app_api/proxy/${APP_ID}/sessions/${data.session_id}`,
+			)
+		} catch (error) {
+			// Surface what the host said — 415 for an unsupported format,
+			// 409 for a file already running, and so on. Never "something
+			// went wrong".
+			const detail =
+				(error as { response?: { data?: { message?: string } } })?.response
+					?.data?.message ?? String(error)
+			showError(t(APP_ID, 'Could not start the session: {detail}', { detail }))
+			return false
+		}
 
 		// `null` signals to the Files app that this action handled its
 		// own UX (no further file-list navigation needed).

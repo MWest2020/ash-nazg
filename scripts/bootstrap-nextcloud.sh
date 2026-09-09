@@ -217,7 +217,7 @@ Working now:
   - Spawned ExApp: docker ps | grep ${APP_ID}
 
 Known gap (see openspec/changes/wire-dosbox-engine/tasks.md):
-  - The 'deploy-daemon-spawn' self-check fails on a HaRP install.
+  - The 'engine-runtime' self-check fails on a HaRP install.
     The host shim spawns engine containers by shelling out to
     'docker run', and an ExApp container has neither the docker CLI
     nor a socket. HaRP exposes no spawn API to ExApps either. Which

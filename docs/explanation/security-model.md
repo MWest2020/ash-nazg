@@ -25,18 +25,18 @@ documentation bug — file it.
 
 Ash Nazg runs **user-supplied, potentially untrusted binaries**
 inside a Nextcloud instance. The binary is treated as untrusted
-input to the sandbox. Everything else — the host shim, the engine
-container image, the Nextcloud admin who installed the app — is in
-the trusted base. The system protects the rest of the Nextcloud
+input to the sandbox. Everything else — the host shim, the app image
+that carries the emulator, the Nextcloud admin who installed the app —
+is in the trusted base. The system protects the rest of the Nextcloud
 instance and the Internet at large from the user-supplied binary.
 It does **not** protect the Nextcloud instance from a malicious
 admin (admin is trusted by design, in v1).
 
 ## 2. The three sandbox layers
 
-Defence in depth, three independent layers. A bypass of any one
-layer should not by itself yield arbitrary code execution outside
-its intended scope.
+Defence in depth, three layers. They are not equally strong, and the
+page says which is which: Layer 2 is the emulator, and since the engine
+ships inside the app container it is the load-bearing one.
 
 ### Layer 1 — Nextcloud admin gating
 
@@ -50,41 +50,53 @@ Only admin users can dispatch a binary in v1.
 The frontend's `enabled` predicate is convenience. The `/run`
 endpoint MUST refuse non-admin requests independently of the UI.
 
-### Layer 2 — Container resource limits
+### Layer 2 — The emulator
 
-Each Run produces a fresh ephemeral engine container. The host
-imposes hard limits via Docker run flags before the binary
-executes.
+Each Run starts a fresh engine process tree inside the Ash Nazg
+container. There is no engine container: an ExApp cannot start one (no
+Docker CLI, no socket, no spawn API for ExApps — see
+`openspec/changes/wire-dosbox-engine/design.md`, *Decision: the engine
+ships in the host image*). The boundary at this layer is DOSBox-X: the
+binary is a DOS program under emulation, never native code on the
+container's CPU.
 
-| Limit                          | Default       | Backed by                                                                                          |
-|--------------------------------|---------------|----------------------------------------------------------------------------------------------------|
-| CPU                            | 1.0 core      | `specs/sandbox/spec.md` → *Resource limits enforced at container level*, scenario *CPU limit enforced* |
-| Memory                         | 1024 MB       | `specs/sandbox/spec.md` → same requirement, scenario *Memory limit enforced*                        |
-| Network                        | none — only the AppAPI proxy network | `specs/sandbox/spec.md` → same requirement, scenario *No host network exposed*    |
-| Root filesystem                | read-only     | `specs/sandbox/spec.md` → *Requirement: Read-only root filesystem*                                  |
-| Writable scratch               | tmpfs at `/tmp`, 256 MB | Design note in `design.md` § *Security posture*; codified per-engine via `SessionConfig`. |
-| Idle timeout                   | 900 s (15 min, configurable) | `engines/spec.md` → dosbox-x `SessionConfig.idle_timeout_seconds`                       |
-| Termination on idle/timeout    | SIGTERM, 30 s grace, then SIGKILL | Design note in `design.md` § *Security posture*.                                   |
+| Bound                       | Default                              | Backed by                                                                                 |
+|-----------------------------|--------------------------------------|-------------------------------------------------------------------------------------------|
+| Concurrent sessions         | 8                                    | `specs/sandbox/spec.md` → *Session resources are bounded by what the runtime offers*        |
+| Scheduling priority         | nice +10 relative to the shim        | same requirement, scenario *A session cannot starve the shim*                              |
+| Maximum session duration    | 4 h                                  | `specs/engines/spec.md` → *Engine session lifecycle bounded*                                |
+| Writable surface            | one private 0700 session directory   | `specs/sandbox/spec.md` → *A session writes only inside its own directory*                  |
+| Termination                 | SIGTERM, 30 s grace, then SIGKILL    | `specs/engines/spec.md` → *Engine session lifecycle bounded*                                |
 
-Memory and CPU enforcement is via cgroups, not application-layer
-self-policing. The engine binary cannot lift its own ceiling.
+**What this layer does not give you**, stated because an earlier version
+of this page promised it: there is no cgroup CPU or memory limit, the
+root filesystem is not read-only, and the session runs under the same
+uid as the shim. A compromise of DOSBox-X itself therefore reaches the
+shim's environment, `APP_SECRET` included. The shim keeps its variables
+out of the session's environment as hygiene, not as a boundary. Hard
+resource isolation returns when each engine becomes its own ExApp, which
+AppAPI deploys and the deploy daemon limits.
 
-### Layer 3 — Per-session WebDAV scope-restricted token
+Idle-based termination is not implemented: the host cannot see the
+session's websocket traffic, and claiming an idle timeout it cannot
+observe would be worse than not claiming one. It arrives with
+`streaming-proxy`, which does see that traffic.
 
-Each spawned engine receives a per-session AppAPI user token. The
-WebDAV mount inside the container uses that token; the token's
-scope is the user's own Files, nothing else.
+### Layer 3 — The session sees one file
 
-| Claim                                                  | Backed by                                                                                                       |
-|--------------------------------------------------------|-----------------------------------------------------------------------------------------------------------------|
-| Token can read/write only the issuing user's Files.    | `specs/sandbox/spec.md` → *Requirement: Per-session token scoping*, scenario *Token cannot read other users' files*. |
-| Token expires when the session ends.                   | `specs/sandbox/spec.md` → same requirement, scenario *Token expires with session*.                              |
-| Token is never exposed to the binary directly.         | The token is consumed by `davfs2` at mount time; it is not an environment variable visible to the running binary's process.  Implementation in `wire-dosbox-engine`. |
+A session does not mount the user's Files. The shim downloads the single
+binary being run into the session's private directory and starts the
+emulator there.
 
-A binary that escapes the davfs2 mount (which would be a Linux
-kernel bug) still gains nothing — the token is gone from process
-memory once the mount is active, and the network is locked down at
-Layer 2.
+| Claim                                                   | Backed by                                                                                   |
+|---------------------------------------------------------|---------------------------------------------------------------------------------------------|
+| A session can reach only the binary it was asked to run. | `specs/sandbox/spec.md` → *A session writes only inside its own directory*, scenario *The session sees one file* |
+| The directory is removed when the session ends.          | same requirement, scenario *Session directory removed on close*                              |
+| No mount privileges are needed at all.                   | There is no davfs2 mount; the download uses the shim's own WebDAV client.                     |
+
+This is a narrower grant than the per-session WebDAV token the earlier
+design described: the session never holds a credential, because it never
+talks to Nextcloud.
 
 ## 3. Audit log per execution
 
@@ -154,9 +166,15 @@ design.
   engine bug enables 100% CPU or OOM, but a remote-code-execution
   bug *inside* DOSBox-X reaching the binary's own privilege level
   is out of scope.
-- **A Linux kernel sandbox escape.** If an attacker escapes
-  cgroups, namespaces, or seccomp filters via a kernel bug, every
+- **A Linux kernel sandbox escape.** If an attacker escapes the
+  container's namespaces or seccomp filters via a kernel bug, every
   layer above is moot. Mitigation: keep the host kernel patched.
+- **A bug in DOSBox-X itself.** Layer 2 is the emulator, so a
+  vulnerability in DOSBox-X that lets an emulated program execute native
+  code lands in the app container, under the app's uid, next to its
+  Nextcloud credentials. Mitigation: keep the image current, and treat
+  the engine as the boundary it is when deciding whether to enable the
+  app at all.
 - **Long-running side-channel attacks.** The 15-minute idle
   timeout limits the window for cache-timing or row-hammer style
   attacks but does not prevent them. Customers with this in their
@@ -178,7 +196,7 @@ layer; see `docs/testing.md` for the full layer system.
 | Promise                                                                         | Layer that checks it          |
 |---------------------------------------------------------------------------------|-------------------------------|
 | Host shim refuses non-admin `/run`.                                              | Level 1 (pytest, in `wire-dosbox-engine`). |
-| Engine spawn config enforces CPU / memory / network / read-only root.            | Level 1 (pytest over `SessionConfig`) + Level 3 (real Docker spawn). |
+| Session bounds: concurrency cap, private 0700 directory, priority, termination.   | Level 1 (pytest over the spawner) + Level 3 (a real Run on a real Nextcloud). |
 | `<image-tag>` is concrete, never `latest`.                                       | Level 2 (`scripts/verify-info-xml.sh`). |
 | Declared scopes are an AppAPI-recognised set.                                    | Level 2 + Level 3.            |
 | Audit log entry contains every required field.                                   | Level 1 (pytest fixtures comparing against an expected schema). |

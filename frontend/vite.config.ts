@@ -33,6 +33,7 @@ export default defineConfig({
 			input: {
 				'files-action': resolve(__dirname, 'src/files-action.ts'),
 				'admin-settings': resolve(__dirname, 'src/admin-settings-main.ts'),
+				'session-status': resolve(__dirname, 'src/session-status-main.ts'),
 			},
 			output: {
 				entryFileNames: 'js/[name]-[hash].js',

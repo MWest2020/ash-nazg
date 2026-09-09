@@ -40,9 +40,16 @@ host/static/
 # --- Repository content not needed at runtime ---
 openspec/
 docs/
-engines/
 scripts/
 .claude/
+
+# engines/ is only partly excluded: since the engine runs inside the
+# host image, its entrypoint IS runtime content. The engine's own
+# Dockerfile and docs are not.
+engines/*
+!engines/dosbox-x/
+engines/dosbox-x/*
+!engines/dosbox-x/entrypoint.sh
 
 # NOTE: `appinfo/info.xml` and `l10n/` ARE needed in the runtime
 # image — the host's translations-folder declared in info.xml points

@@ -19,10 +19,12 @@ AppAPI OCS implementations in `main.py`.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import logging
 import uuid
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Final, Protocol
 
 from ash_nazg.detection import DETECTION_READ_BYTES, UNKNOWN, classify
@@ -32,6 +34,9 @@ from ash_nazg.engines.registry import EngineRegistry
 logger = logging.getLogger(__name__)
 
 DEFAULT_MAX_FILE_BYTES: Final[int] = 100 * 1024 * 1024  # 100 MB per spec default
+# Sandbox spec, "Engine session lifecycle bounded": maximum session
+# duration, default 4 hours.
+DEFAULT_MAX_SESSION_SECONDS: Final[float] = 4 * 60 * 60
 
 
 # --- Protocols injected by main.py ---------------------------------------
@@ -45,6 +50,9 @@ class FileReader(Protocol):
 
     async def get_size(self, files_path: str) -> int:
         """Return the total file size in bytes."""
+
+    async def download_to(self, files_path: str, destination: Path) -> None:
+        """Write the whole file to `destination` (used to start a session)."""
 
 
 @dataclass(frozen=True)
@@ -128,6 +136,13 @@ class ActiveSessionTracker:
     def release(self, user_id: str, files_path: str) -> None:
         self._by_key.pop((user_id, files_path), None)
 
+    def owner_of(self, session_id: str) -> tuple[str, str] | None:
+        """(user_id, files_path) for a session, or None if it is not held."""
+        for (user_id, files_path), active in self._by_key.items():
+            if active.session_id == session_id:
+                return user_id, files_path
+        return None
+
 
 # --- Dispatcher -----------------------------------------------------------
 
@@ -142,6 +157,7 @@ class Dispatcher:
         audit: AuditLogger,
         active_sessions: ActiveSessionTracker | None = None,
         max_file_bytes: int = DEFAULT_MAX_FILE_BYTES,
+        max_session_seconds: float = DEFAULT_MAX_SESSION_SECONDS,
     ) -> None:
         self.registry = registry
         self.file_reader = file_reader
@@ -149,6 +165,10 @@ class Dispatcher:
         self.audit = audit
         self.active = active_sessions or ActiveSessionTracker()
         self.max_file_bytes = max_file_bytes
+        self.max_session_seconds = max_session_seconds
+        # Expiry timers, kept referenced so the loop cannot collect them
+        # mid-flight.
+        self._expiries: set[asyncio.Task[None]] = set()
 
     async def dispatch(
         self,
@@ -167,7 +187,24 @@ class Dispatcher:
                 message="Only Nextcloud admins may run binaries via Ash Nazg.",
             )
 
-        size_bytes = await self.file_reader.get_size(files_path)
+        try:
+            size_bytes = await self.file_reader.get_size(files_path)
+        except Exception as exc:
+            # A path that is not there is the user's mistake, not a
+            # server fault: answering 500 with a WebDAV error would be
+            # both wrong and unreadable.
+            logger.info("could not read %s: %s", files_path, exc)
+            await self._audit(
+                "refused",
+                user_id=user_id,
+                files_path=files_path,
+                reason="unreadable",
+            )
+            return DispatchError(
+                status_code=404,
+                code="file_not_found",
+                message=f"Could not read {files_path} from your Files.",
+            )
         if size_bytes > self.max_file_bytes:
             await self._audit(
                 "refused",
@@ -290,11 +327,55 @@ class Dispatcher:
             container_id=handle.container_id,
             file_sha256=file_sha256,
         )
+        self._schedule_expiry(handle.session_id, user_id, files_path)
         return DispatchOk(
             session_id=handle.session_id,
             host=handle.host,
             port=handle.port,
         )
+
+    async def close(self, session_id: str, *, user_id: str) -> bool:
+        """End a session and free its claim.
+
+        Returns False when this user holds no such session — which is
+        also the answer for someone else's session, so one user cannot
+        probe for another's session ids.
+        """
+        owner = self.active.owner_of(session_id)
+        if owner is None or owner[0] != user_id:
+            return False
+        terminate = getattr(self.spawner, "terminate", None)
+        if callable(terminate):
+            await terminate(session_id)
+        self.active.release(*owner)
+        await self._audit(
+            "closed",
+            user_id=user_id,
+            files_path=owner[1],
+            session_id=session_id,
+        )
+        return True
+
+    def _schedule_expiry(self, session_id: str, user_id: str, files_path: str) -> None:
+        """Bound the session's lifetime (sandbox spec, max session duration).
+
+        The claim on (user, file) is what makes a second Run return 409,
+        so it has to be released when the session ends — otherwise a user
+        who runs a file once can never run it again.
+        """
+
+        async def _expire() -> None:
+            await asyncio.sleep(self.max_session_seconds)
+            if await self.close(session_id, user_id=user_id):
+                logger.info(
+                    "session %s hit the %.0fs maximum duration and was closed",
+                    session_id,
+                    self.max_session_seconds,
+                )
+
+        task = asyncio.create_task(_expire())
+        self._expiries.add(task)
+        task.add_done_callback(self._expiries.discard)
 
     def _select_engine(self, meta: FileMeta) -> Any:  # returns Engine | None
         for engine in self.registry.enabled():

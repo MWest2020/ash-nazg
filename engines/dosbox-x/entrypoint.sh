@@ -29,6 +29,11 @@ set -euo pipefail
 : "${VNC_DISPLAY:=:1}"
 : "${VNC_GEOMETRY:=1280x800}"
 : "${VNC_DEPTH:=24}"
+# One container can host more than one session (the in-image engine), so
+# the websocket port and the xstartup file are per-session. Defaults keep
+# the one-container-per-session path byte-identical to before.
+: "${VNC_WEBSOCKET_PORT:=}"
+: "${XSTARTUP_PATH:=${HOME}/.vnc/xstartup}"
 mkdir -p "${HOME}/.vnc"
 chmod 700 "${HOME}/.vnc"
 
@@ -102,7 +107,7 @@ fi
 
 # --- xstartup: what gets exec'd inside the X session ----------------------
 # DOSBox-X is the whole UI — when it exits the session ends.
-cat > "${HOME}/.vnc/xstartup" <<'XSTARTUP'
+cat > "${XSTARTUP_PATH}" <<'XSTARTUP'
 #!/bin/sh
 # Disable the screensaver and other X niceties; we only want dosbox.
 xsetroot -solid black 2>/dev/null || true
@@ -126,7 +131,7 @@ else
     exec dosbox-x -nopromptfolder -defaultdir "${PWD}"
 fi
 XSTARTUP
-chmod 755 "${HOME}/.vnc/xstartup"
+chmod 755 "${XSTARTUP_PATH}"
 
 # Skip KasmVNC's interactive desktop-environment prompt — it looks
 # for this sentinel file. Without it the first-run wizard runs
@@ -146,9 +151,18 @@ echo "ash-nazg dosbox-x engine: FILE_PATH=${FILE_PATH:-<unset>}"
 # `-SecurityTypes None` disables VNC auth — DEMO MODE only;
 # production will replace this with per-session tokens through
 # AppAPI/HaRP.
-exec kasmvncserver "${VNC_DISPLAY}" \
-    -geometry "${VNC_GEOMETRY}" \
-    -depth "${VNC_DEPTH}" \
-    -SecurityTypes None \
-    -xstartup "${HOME}/.vnc/xstartup" \
+kasm_args=(
+    "${VNC_DISPLAY}"
+    -geometry "${VNC_GEOMETRY}"
+    -depth "${VNC_DEPTH}"
+    -SecurityTypes None
+    -xstartup "${XSTARTUP_PATH}"
     -fg
+)
+# Without an explicit port KasmVNC picks one per display; the host shim
+# needs to know it up front to hand a URL back to the browser.
+if [ -n "${VNC_WEBSOCKET_PORT}" ]; then
+    kasm_args+=(-websocketPort "${VNC_WEBSOCKET_PORT}")
+fi
+
+exec kasmvncserver "${kasm_args[@]}"

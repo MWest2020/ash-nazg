@@ -45,7 +45,7 @@ def test_selftest_returns_canonical_shape() -> None:
     expected_ids = [
         "host-health",
         "engines-registered",
-        "deploy-daemon-spawn",
+        "engine-runtime",
         "audit-log-write",
     ]
     actual_ids = [check["id"] for check in body["checks"]]

@@ -6,7 +6,6 @@ import pytest
 
 from ash_nazg.engines import FileMeta, SessionConfig
 from ash_nazg.spawners import (
-    DockerSubprocessSpawner,
     StubSpawner,
     stub_spawner_from_env,
 )
@@ -63,56 +62,3 @@ def test_stub_spawner_from_env_overrides(monkeypatch: pytest.MonkeyPatch) -> Non
     spawner = stub_spawner_from_env()
     assert spawner.host == "engine.svc"
     assert spawner.port == 9999
-
-
-def test_docker_subprocess_argv_has_required_flags() -> None:
-    spawner = DockerSubprocessSpawner(network="ash-nazg-net")
-    argv = spawner._build_argv(
-        session_id="abc12345-uuid",
-        config=_config(),
-        file_meta=_meta(),
-        user_id="alice",
-    )
-    assert argv[0] == "docker"
-    assert argv[1] == "run"
-    # sandbox spec resource limits
-    assert "--cpus" in argv and "1.0" in argv
-    assert "--memory" in argv and "1024m" in argv
-    assert "--memory-swap" in argv and argv.count("1024m") == 2
-    # read-only root + tmpfs for /tmp
-    assert "--read-only" in argv
-    assert any(a.startswith("/tmp:rw,size=") for a in argv)  # noqa: S108 — docker tmpfs spec
-    # network attach
-    assert "ash-nazg-net" in argv
-    # per-session env
-    assert any(a.startswith("FILE_PATH=") and "keen1.exe" in a for a in argv)
-    assert any(a == "NC_USER_ID=alice" for a in argv)
-    # session label for cleanup
-    assert any(a.startswith("session_id=") for a in argv)
-    # image is the last positional arg
-    assert argv[-1] == "ghcr.io/test/engine:0.1"
-
-
-def test_docker_subprocess_no_network_arg_when_unset() -> None:
-    spawner = DockerSubprocessSpawner(network=None)
-    argv = spawner._build_argv(
-        session_id="abc",
-        config=_config(),
-        file_meta=_meta(),
-        user_id="alice",
-    )
-    assert "--network" not in argv
-
-
-def test_docker_subprocess_extra_env_passed_through() -> None:
-    spawner = DockerSubprocessSpawner(
-        extra_env={"NEXTCLOUD_URL": "http://nextcloud", "APP_TOKEN": "secret"}
-    )
-    argv = spawner._build_argv(
-        session_id="abc",
-        config=_config(),
-        file_meta=_meta(),
-        user_id="alice",
-    )
-    assert "NEXTCLOUD_URL=http://nextcloud" in argv
-    assert "APP_TOKEN=secret" in argv

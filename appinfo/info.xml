@@ -153,6 +153,16 @@ losse packages toegevoegd.
                 <access_level>ADMIN</access_level>
             </route>
             <route>
+                <url>^/?sessions/.+$</url>
+                <verb>GET</verb>
+                <access_level>ADMIN</access_level>
+            </route>
+            <route>
+                <url>^/?sessions/.+$</url>
+                <verb>DELETE</verb>
+                <access_level>ADMIN</access_level>
+            </route>
+            <route>
                 <url>^/?admin/settings/?$</url>
                 <verb>GET</verb>
                 <access_level>ADMIN</access_level>

@@ -60,8 +60,9 @@ from ash_nazg.io_adapters import (
 )
 from ash_nazg.request_context import extract_user
 from ash_nazg.selftest import router as selftest_router
+from ash_nazg.session_page import router as session_page_router
 from ash_nazg.spawners import (
-    DockerSubprocessSpawner,
+    InImageSpawner,
     stub_spawner_from_env,
 )
 
@@ -72,7 +73,6 @@ STATIC_ROOT: Final[Path] = Path(__file__).resolve().parent.parent.parent / "stat
 
 MODE_DEMO: Final[str] = "demo"
 MODE_NEXTCLOUD: Final[str] = "nextcloud"
-DEFAULT_NETWORK_ENV: Final[str] = "ASH_NAZG_ENGINE_NETWORK"
 
 
 def _resolved_mode() -> str:
@@ -106,12 +106,11 @@ def _make_dependencies() -> tuple[FileReader, SessionSpawner, AuditLogger]:
             token=token,
             app_version=os.environ.get("APP_VERSION", VERSION),
         )
-        network = os.environ.get(DEFAULT_NETWORK_ENV)
-        spawner = DockerSubprocessSpawner(
-            network=network,
-            extra_env={"NEXTCLOUD_URL": nc_url, "APP_TOKEN": token},
-        )
-        logger.info("dispatcher mode=nextcloud network=%s", network)
+        # Sessions run inside this container: an ExApp cannot spawn a
+        # sibling container (no docker CLI, no socket, no HaRP spawn API
+        # for ExApps). See wire-dosbox-engine, "Open ontwerpbesluit".
+        spawner = InImageSpawner(file_reader=reader)
+        logger.info("dispatcher mode=nextcloud spawner=in-image")
         return reader, spawner, audit
 
     logger.info("dispatcher mode=demo (stub spawner + in-memory adapters)")
@@ -185,6 +184,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # enabled, and at lifespan time it never is.
 
     yield
+
+    # Sessions are children of this process: leaving them behind on
+    # shutdown would orphan an emulator per Run (sandbox spec, "Engine
+    # session lifecycle bounded" — host shutdown terminates sessions).
+    terminate_all = getattr(spawner, "terminate_all", None)
+    if callable(terminate_all):
+        await terminate_all()
+
     # Best-effort cleanup of HTTP adapters
     aclose = getattr(reader, "aclose", None)
     if callable(aclose):
@@ -204,6 +211,7 @@ app = FastAPI(
 app.include_router(selftest_router)
 app.include_router(admin_settings_router)
 app.include_router(files_action_router)
+app.include_router(session_page_router)
 
 # Serve the vite-built frontend bundle. The directory may not exist
 # on a fresh checkout; only mount when present so the app still starts
@@ -283,6 +291,26 @@ class RunResponse(BaseModel):
     session_id: str
     host: str
     port: int
+
+
+@app.delete("/sessions/{session_id}", tags=["dispatch"])
+async def close_session(session_id: str, request: Request) -> JSONResponse:
+    """End a session the caller started.
+
+    The claim that makes a second Run of the same file return 409 lives
+    until this is called (or the session hits its maximum duration), so
+    closing is what lets a user run the same binary again.
+    """
+    user = extract_user(request, admin_route=True)
+    dispatcher: Dispatcher = request.app.state.dispatcher
+    if await dispatcher.close(session_id, user_id=user.user_id):
+        return JSONResponse(status_code=200, content={"session_id": session_id,
+                                                      "status": "closed"})
+    return JSONResponse(
+        status_code=404,
+        content={"error": "unknown_session",
+                 "message": "no such session for this user"},
+    )
 
 
 @app.post("/run", tags=["dispatch"])

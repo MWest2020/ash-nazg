@@ -88,7 +88,8 @@ def test_files_action_returns_redirect_handler(
 def test_files_action_unknown_file_returns_4xx(
     client_with_dispatcher: TestClient,
 ) -> None:
-    """File not in the in-memory reader → empty head → unknown → 400."""
+    """A file that is not in Files → 404, the same answer the WebDAV
+    reader's failure produces in production."""
     resp = client_with_dispatcher.post(
         "/files-action",
         json={
@@ -98,7 +99,7 @@ def test_files_action_unknown_file_returns_4xx(
             "userId": "alice",
         },
     )
-    assert resp.status_code == 400
+    assert resp.status_code == 404
 
 
 def test_files_action_dispatcher_not_ready_returns_503() -> None:

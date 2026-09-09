@@ -15,6 +15,7 @@ from __future__ import annotations
 import base64
 import json
 import logging
+from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
@@ -53,10 +54,19 @@ class InMemoryFileReader:
     async def read_head(self, files_path: str, byte_count: int) -> bytes:
         return self._heads.get(files_path, b"")[:byte_count]
 
+    async def download_to(self, files_path: str, destination: Path) -> None:
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(self._heads.get(files_path, b""))
+
     async def get_size(self, files_path: str) -> int:
         if files_path in self._sizes:
             return self._sizes[files_path]
-        return len(self._heads.get(files_path, b""))
+        if files_path not in self._heads:
+            # Same shape as the WebDAV reader on a missing path, so tests
+            # exercise the dispatcher's not-found path rather than a
+            # zero-byte file that exists nowhere.
+            raise FileNotFoundError(files_path)
+        return len(self._heads[files_path])
 
 
 class InMemoryAuditLogger:
@@ -154,6 +164,30 @@ class WebDavFileReader:
                 f"WebDAV HEAD for {files_path} missing Content-Length"
             )
         return int(cl)
+
+    async def download_to(self, files_path: str, destination: Path) -> None:
+        """Stream the whole file to `destination`.
+
+        The in-image engine gets its binary as a plain file in a private
+        session directory rather than a WebDAV mount: no davfs2, no
+        mount privileges, and a session sees exactly the one file it was
+        asked to run instead of the user's entire Files tree.
+        """
+        url = self._url_for(files_path)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        async with self._client.stream(
+            "GET", url, headers=self._auth_headers(), follow_redirects=True
+        ) as resp:
+            if resp.status_code >= 400:
+                body = (await resp.aread())[:200].decode(errors="replace")
+                raise RuntimeError(
+                    f"WebDAV download failed for {files_path}: "
+                    f"{resp.status_code} {body}"
+                )
+            with destination.open("wb") as fh:
+                async for chunk in resp.aiter_bytes():
+                    fh.write(chunk)
+        destination.chmod(0o600)
 
 
 # --- OCS audit logger ------------------------------------------------------

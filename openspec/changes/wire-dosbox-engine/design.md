@@ -6,6 +6,12 @@
 
 ## Sequence — first wired Run
 
+> **Superseded below.** This drawing has the host shim asking the deploy
+> daemon to spawn an engine container. That API does not exist for an
+> ExApp; see *Decision: the engine ships in the host image*. The steps
+> are otherwise unchanged — the engine is a process tree in the ExApp
+> container instead of a sibling container.
+
 ```
 Browser              Host shim                     Deploy daemon (HaRP)         Engine container
    │                    │                                  │                            │
@@ -206,6 +212,46 @@ from `bootstrap-nextcloud.sh` and re-running
 That's the boring-and-verifiable definition of "the handshake is
 the source of truth, not the workaround".
 
+## Decision: the engine ships in the host image
+
+**Context.** `POST /spawn (image, env, limits)` in the sequence above
+assumed the deploy daemon offers ExApps a way to start a container. It
+does not. Measured on NC 32.0.14 + AppAPI 5.x + HaRP v0.4.0:
+
+- An ExApp container has no docker CLI and no socket. The
+  `DockerSubprocessSpawner` reported it plainly — `docker binary not
+  found on PATH` — which is how this surfaced.
+- HaRP's docker-engine backend is for AppAPI, not for ExApps. With the
+  shared key an ExApp gets past authentication (401 becomes 404), but
+  every docker path answers 404. There is no sanctioned spawn surface.
+
+**Options.** (a) the engine ships in the ExApp image; (b) require a
+docker socket to be mounted into the ExApp; (c) each engine becomes its
+own ExApp that AppAPI deploys.
+
+**Decision: (a), for the MVP.** (b) asks an administrator for exactly
+the privilege an App Store reviewer looks for, and rules out managed
+installs. (c) is where container-level isolation comes back and is the
+direction once there is more than one engine, but it makes every engine
+a separate App Store item with its own lifecycle — too much for the
+first release.
+
+**What it costs, precisely.** A session is a process tree, not a
+container, so: no cgroup CPU/memory limits, the root filesystem is not
+read-only, and the emulator runs under the shim's uid — it can read the
+shim's environment, `APP_SECRET` included. What remains is the emulator
+itself: the untrusted binary is a DOS program inside DOSBox-X, never
+native code on the container's CPU. That is a real boundary, and it is
+the one this design leans on. The `sandbox` and `engines` spec deltas
+say so in those words rather than restating the container promise.
+
+**What is enforced instead.** A private 0700 directory per session
+holding only the binary (downloaded, not mounted — so no davfs2 and no
+mount privileges); a cap on concurrent sessions; a scheduling priority
+below the shim's; a maximum session duration; termination on close and
+on host shutdown; and release of the (user, file) claim on every one of
+those paths, so a closed session can be started again.
+
 ## Self-test wiring
 
 Each of the four checks gets a real implementation, while the
@@ -215,7 +261,7 @@ JSON shape stays identical:
 |------------------------|--------------------------------------------------------------------------------------------------|
 | `host-health`          | `httpx.get('http://127.0.0.1:8080/health')` from inside the host container; status==200.       |
 | `engines-registered`   | `len([e for e in registry.enabled_engines()]) >= 1`.                                            |
-| `deploy-daemon-spawn`  | `POST /spawn` with a transient sidecar (busybox sleep 1); assert it tears down within 30 s.    |
+| `engine-runtime`  | The spawner's preflight: `dosbox-x` and `kasmvncserver` are on PATH, the engine entrypoint is executable, and a session slot is free. |
 | `audit-log-write`      | Write an `event: ash_nazg.selftest` entry; assert the AppAPI audit-log API returned 2xx.        |
 
 ## Boring valkuil

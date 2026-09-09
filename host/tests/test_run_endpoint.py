@@ -106,3 +106,17 @@ def test_run_missing_body_returns_422(client: TestClient) -> None:
     app.state.dispatcher = dispatcher
     resp = client.post("/run", headers=_admin_header(), json={})
     assert resp.status_code == 422
+
+
+def test_missing_file_is_404_not_500(client: TestClient) -> None:
+    """A path that is not in Files is a client error. Letting the WebDAV
+    failure bubble up would answer 500 with a transport message."""
+    dispatcher, _ = _build_dispatcher(b"MZ\x90\x00")
+    client.app.state.dispatcher = dispatcher
+
+    response = client.post(
+        "/run", json={"path": "/Programs/not-there.exe"}, headers=_admin_header()
+    )
+
+    assert response.status_code == 404
+    assert response.json()["error"] == "file_not_found"

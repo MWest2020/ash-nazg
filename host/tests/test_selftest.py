@@ -96,7 +96,7 @@ def test_selftest_spawner_preflight_failure_is_reported(client: TestClient) -> N
     app.state.dispatcher = _dispatcher(spawner=DownSpawner())
     body = client.post("/selftest").json()
     assert body["overall"] == "fail"
-    check = _by_id(body)["deploy-daemon-spawn"]
+    check = _by_id(body)["engine-runtime"]
     assert check["status"] == "fail"
     assert "permission denied" in check["message"]
 
@@ -104,6 +104,6 @@ def test_selftest_spawner_preflight_failure_is_reported(client: TestClient) -> N
 def test_selftest_stub_spawner_preflight_ok(client: TestClient) -> None:
     app.state.dispatcher = _dispatcher()
     body = client.post("/selftest").json()
-    check = _by_id(body)["deploy-daemon-spawn"]
+    check = _by_id(body)["engine-runtime"]
     assert check["status"] == "ok"
     assert "stub spawner ready" in check["message"]

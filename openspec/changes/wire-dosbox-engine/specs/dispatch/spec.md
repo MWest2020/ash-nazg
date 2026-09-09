@@ -43,7 +43,7 @@ first engine whose `can_handle()` returns True.
 ### Requirement: Self-test reports real per-check status
 
 The `/selftest` endpoint SHALL execute four named checks
-(`host-health`, `engines-registered`, `deploy-daemon-spawn`,
+(`host-health`, `engines-registered`, `engine-runtime`,
 `audit-log-write`) and return their actual results in the JSON
 shape locked by `init-mvp-runtime`. The schema (field names,
 order of checks) MUST NOT change.
@@ -56,14 +56,14 @@ order of checks) MUST NOT change.
 - **THEN** every check SHALL return `status: "ok"`
 - **AND** the `overall` field SHALL be `"ok"`
 - **AND** the order of checks in the response SHALL be exactly
-  `[host-health, engines-registered, deploy-daemon-spawn,
+  `[host-health, engines-registered, engine-runtime,
    audit-log-write]`.
 
 #### Scenario: Failing check reports actual error
 
 - **GIVEN** the deploy daemon is unreachable
 - **WHEN** an admin POSTs to `/selftest`
-- **THEN** the `deploy-daemon-spawn` check SHALL return
+- **THEN** the `engine-runtime` check SHALL return
   `status: "fail"` with `message` containing the actual error
   surface (HTTP status, hostname, or transport error)
 - **AND** the `overall` field SHALL be `"fail"`

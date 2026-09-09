@@ -24,6 +24,7 @@ last_reviewed: 2026-07-13
 | Nextcloud         | 32       | Verified against 32.0.14 with AppAPI 5.x. NC 30 was the scaffold's first target and is no longer supported. |
 | AppAPI            | 5.x      | Install from the App Store before installing Ash Nazg.                                |
 | HaRP FRP tunnel   | on       | The ExApp opens an FRP tunnel back to HaRP; the image ships `frpc` for it.            |
+| Sessions          | in-app   | A session runs inside the Ash Nazg container, not in a container of its own — see *Isolation* below. |
 | Deploy daemon     | **HaRP** | DSP is **not** supported. Streaming uses websockets, which DSP does not proxy reliably. |
 | Container runtime | Docker (or compatible) | Required by HaRP.                                                       |
 | Architecture      | linux/amd64 or linux/arm64 | Both host and engine images are multi-arch.                          |
@@ -119,3 +120,33 @@ occ app:remove ash_nazg
 Removes the manifest registration and the host container. User
 Files are untouched (Ash Nazg stores no persistent state of its
 own outside the AppAPI volume; sessions are ephemeral).
+
+## Isolation — what a session is, and is not
+
+A Run does not start a container. The emulator ships inside the Ash Nazg
+app container, and a session is a process tree there. An ExApp cannot
+start a sibling container: it has no Docker CLI, no socket, and the
+deploy daemon offers ExApps no spawn API.
+
+What that means for you as an administrator:
+
+- The binary your user runs is a **DOS program inside DOSBox-X**. The
+  emulator is the boundary — the program never executes as native code
+  on your host.
+- A session has **no cgroup CPU or memory limit**. It runs at a lower
+  scheduling priority than the app itself, the number of concurrent
+  sessions is capped, and every session has a maximum duration, but a
+  busy session can use the CPU the container is allowed.
+- A session runs **under the same user as the app**, so a compromise of
+  DOSBox-X itself — not of the DOS program it runs — reaches the app's
+  environment, including its Nextcloud credentials. The app keeps its
+  own variables out of the session's environment, but that is hygiene,
+  not a boundary.
+- A session gets a **private directory containing only the binary**,
+  downloaded from Files. There is no WebDAV mount, so a session cannot
+  reach the rest of the user's Files, and the directory is removed when
+  the session ends.
+
+If you need container-level isolation per session, this release is not
+the one for you: that arrives when each engine becomes its own ExApp,
+deployed by AppAPI.

@@ -31,13 +31,14 @@
 > (bestaat niet — 404) met basic auth (kan niet — 401). Nu AppAPI's
 > log-endpoint met de `AUTHORIZATION-APP-API`-header; live groen.
 >
-> **Nog open, en het is één ding:** de host-shim spawnt engine-
-> containers via `docker run`, en een ExApp-container heeft geen
-> docker-CLI, geen socket, en HaRP biedt ExApps geen spawn-API. Zie
-> *Open ontwerpbesluit* onderaan. Daarop wachten: §7 (entrypoint
-> draaien), §8 (frontend wiring — zonder werkende spawn levert dat
-> alleen een knop die altijd faalt), §9.3, §12, en de laatste
-> acceptatiebullet (`POST /run` spawnt een container).
+> **Het spawn-besluit is genomen (Mark, 2026-09-09): de engine gaat in
+> hetzelfde image.** Een sessie is nu een procesboom in de ExApp-
+> container, geen zustercontainer. Daarmee zijn §7, §8, §9.3 en de
+> `/run`-acceptatie af; wat het kost staat in `design.md` onder
+> *Decision: the engine ships in the host image* en in de spec-deltas
+> voor `sandbox` en `engines`. Live nagemeten: een door dit repo
+> gegenereerde DOS-binary uit Files draait echt — `dosbox-x` schreef
+> "ASH NAZG OK" via een gemounte C-schijf.
 >
 > §2 (GHCR) is bewust nog open: level-3 gebruikt de lokale registry
 > in de stack als GHCR-stand-in, wat dezelfde pull-en-spawn-weg door
@@ -179,31 +180,40 @@ handshake — and *that* is what `--wait-finish` blocks on.
 
 ## 7. Engine container entrypoint
 
-- [ ] 7.1 `engines/dosbox-x/entrypoint.sh` mounts `/mnt/files` via
-        davfs2 using `NEXTCLOUD_URL` + `APP_TOKEN` injected by the
-        host.
-- [ ] 7.2 Launches `kasmvncserver` on port 6901 (the proxy that
-        exposes it to the browser is `streaming-proxy`).
-- [ ] 7.3 `exec dosbox-x <FILE_PATH>` with the path resolved under
-        `/mnt/files`.
+- [x] 7.1 **Vervallen met het spawn-besluit**: geen davfs2-mount meer.
+        De shim downloadt de binary naar een privé-sessiemap (0700), dus
+        de sessie ziet één bestand in plaats van de hele Files-boom en
+        er is geen mount-privilege nodig. De davfs2-tak blijft in het
+        entrypoint staan voor de losse engine-image.
+- [x] 7.2 Start `kasmvncserver` op de sessiepoort (6900 + slot; de
+        eerste sessie krijgt 6901). Poort en xstartup-pad zijn nu
+        per sessie, zodat één container er meerdere kan dragen.
+- [x] 7.3 `exec dosbox-x <FILE_PATH>` met het pad in de sessiemap, en
+        met `-nopromptfolder` — zonder die vlag vraagt dosbox-x om een
+        werkmap op stdin, krijgt EOF en herhaalt dat tot de schijf vol
+        is (41 GB in twintig minuten, echt gebeurd).
 
 ## 8. Frontend wiring
 
-- [ ] 8.1 `frontend/src/files-action.ts` `exec` calls `POST /run`
-        and navigates to the session status page on success;
-        toasts on error (using the actual error from the host's
-        response, never "something went wrong").
-- [ ] 8.2 `frontend/src/SessionStatus.vue` shows session id, engine
-        name, and a "session running" status. No iframe stream
-        (that's `streaming-proxy`).
+- [x] 8.1 `frontend/src/files-action.ts` `exec` roept `POST /run` aan
+        via de AppAPI-proxy en navigeert naar de sessiepagina; bij een
+        fout toont het de boodschap die de host teruggaf (415, 409,
+        404 met pad), nooit "something went wrong".
+- [x] 8.2 `frontend/src/SessionStatus.vue` toont sessie-id, engine en
+        status, met een knop die de sessie sluit (`DELETE
+        /sessions/{id}`) — sluiten geeft de claim vrij, anders kan de
+        gebruiker hetzelfde bestand nooit opnieuw draaien. Geen
+        iframe-stream; die zit in `streaming-proxy`.
 
 ## 9. Self-test — replace stubs with real checks
 
 - [x] 9.1 `host-health`: in-container `/health` probe.
 - [x] 9.2 `engines-registered`: ≥1 enabled engine.
-- [ ] 9.3 `deploy-daemon-spawn`: spawn + tear down a busybox
-        sidecar via HaRP within 30 s. Rewrites the original
-        AppAPI-4 manual-install version of this check.
+- [x] 9.3 `engine-runtime`: the spawner's preflight — `dosbox-x` and
+        `kasmvncserver` present in the image, the engine entrypoint
+        executable, a session slot free. The original "spawn a busybox
+        sidecar via HaRP" version died with the sibling-container
+        design.
 - [x] 9.4 `audit-log-write`: write `ash_nazg.selftest` and assert
         2xx from the AppAPI audit-log API.
 
@@ -231,9 +241,9 @@ handshake — and *that* is what `--wait-finish` blocks on.
 
 - [ ] 12.1 Open `streaming-proxy` change: KasmVNC iframe +
         websocket proxy through AppAPI's HaRP network.
-- [ ] 12.2 Archive `wire-dosbox-engine` once §1–§10 are green and
-        a manual run produces DOSBox-X output (no streaming yet
-        — `docker exec` into the engine container to verify).
+- [ ] 12.2 Archive `wire-dosbox-engine` once §2 (GHCR) is done. §1 en
+        §3–§11 zijn groen en een echte run produceert DOSBox-X-uitvoer
+        ("ASH NAZG OK", nagemeten in de ExApp-container).
 
 ## Open ontwerpbesluit — hoe spawnt een ExApp een engine-container?
 
