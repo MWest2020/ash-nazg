@@ -6,7 +6,21 @@ spawn API. The engine therefore ships inside the ExApp image and a
 session is a process tree. See `design.md`, *Decision: the engine ships
 in the host image*.
 
-## MODIFIED Requirements
+## REMOVED Requirements
+
+### Requirement: One engine container per session
+
+**Reason**: an ExApp cannot spawn a sibling container. Replaced by *One
+engine session per Run, never reused*, which says the same thing about
+freshness and reuse for the unit that actually exists.
+
+### Requirement: Engine images use pinned tags, never :latest
+
+**Reason**: there is no separate engine image to pin. Replaced by *The
+engine ships in the ExApp image, pinned*, which moves the pinning
+requirement to the image an admin actually installs.
+
+## ADDED Requirements
 
 ### Requirement: One engine session per Run, never reused
 
@@ -31,6 +45,28 @@ Run requests — not even for the same user and the same binary.
 - **WHEN** another Run request arrives
 - **THEN** the host SHALL refuse it with a message naming the limit,
   rather than starting a session it cannot isolate.
+
+### Requirement: The engine ships in the ExApp image, pinned
+
+The engine SHALL be part of the ExApp image rather than a separately
+spawned container image. `appinfo/info.xml` SHALL pin that image with a
+concrete `<image-tag>`, never `latest` — the tag is what an admin
+installs and what an audit points at.
+
+#### Scenario: Latest tag refused
+
+- **GIVEN** `appinfo/info.xml` with `<image-tag>latest</image-tag>`
+- **WHEN** the image manifest check runs
+- **THEN** it SHALL fail with "engine images must use pinned tags".
+
+#### Scenario: The engine is present in the image
+
+- **WHEN** the host's self-test runs its `engine-runtime` check
+- **THEN** it SHALL verify that the emulator and the VNC server are
+  present in this image and that a session slot is free
+- **AND** SHALL report the missing binary by name if either is absent.
+
+## MODIFIED Requirements
 
 ### Requirement: Engine session lifecycle bounded
 
@@ -58,29 +94,20 @@ would be worse than not claiming one.
 - **THEN** the host SHALL terminate the session
 - **AND** SHALL release its claim, so the same file can be run again.
 
-#### Scenario: Host restart cleans up sessions
+#### Scenario: Idle timeout enforced
+
+- **GIVEN** a session whose stream passes through the host, and which has
+  carried no traffic for the configured idle window
+- **WHEN** the window elapses
+- **THEN** the host SHALL terminate the session the same way an explicit
+  close does
+- **AND** where no stream passes through the host, there is no idle
+  signal and this scenario does not apply — the maximum duration is what
+  bounds the session.
+
+#### Scenario: Host restart cleans up engines
 
 - **GIVEN** sessions running when the host shuts down
 - **WHEN** the host process stops
 - **THEN** it SHALL terminate every session it started
 - **AND** SHALL NOT attempt to reattach to them on the next start.
-
-### Requirement: The engine ships in the ExApp image, pinned
-
-The engine SHALL be part of the ExApp image rather than a separately
-spawned container image. `appinfo/info.xml` SHALL pin that image with a
-concrete `<image-tag>`, never `latest` — the tag is what an admin
-installs and what an audit points at.
-
-#### Scenario: Latest tag refused
-
-- **GIVEN** `appinfo/info.xml` with `<image-tag>latest</image-tag>`
-- **WHEN** the image manifest check runs
-- **THEN** it SHALL fail with "engine images must use pinned tags".
-
-#### Scenario: The engine is present in the image
-
-- **WHEN** the host's self-test runs its `engine-runtime` check
-- **THEN** it SHALL verify that the emulator and the VNC server are
-  present in this image and that a session slot is free
-- **AND** SHALL report the missing binary by name if either is absent.

@@ -4,7 +4,22 @@ These requirements described a sibling container the host cannot spawn.
 What replaces them is weaker in exactly one way, and this delta says so
 plainly rather than restating the old promise in new words.
 
-## MODIFIED Requirements
+## REMOVED Requirements
+
+### Requirement: Resource limits enforced at container level
+
+**Reason**: there is no per-session container to apply cgroup limits to.
+Replaced by *Session resources are bounded by what the runtime offers*,
+which states what is actually enforced and what is not.
+
+### Requirement: Read-only root filesystem
+
+**Reason**: the session runs in the app's own container, whose root
+filesystem the app itself needs. Replaced by *A session writes only
+inside its own directory*, which bounds the writable surface where it
+can still be bounded.
+
+## ADDED Requirements
 
 ### Requirement: Session resources are bounded by what the runtime offers
 
@@ -59,8 +74,6 @@ route back to a read-only root is a per-engine ExApp.
 - **GIVEN** a session that is closed or expires
 - **WHEN** termination completes
 - **THEN** the session directory and its contents SHALL be gone.
-
-## ADDED Requirements
 
 ### Requirement: The emulator is the isolation boundary for in-image sessions
 
