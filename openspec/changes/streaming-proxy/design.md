@@ -17,12 +17,52 @@ header. HaRP's haproxy proxies websockets in principle and FRP is a TCP
 tunnel, so the odds are good — but "good odds" is not a measurement, and
 everything in this change is worthless if the answer is no.
 
-So task §1 is a spike: a trivial websocket echo route on the shim, a
-browser through the real proxy chain, and a verdict. If it fails, the
-fallback is not "try harder": it is a documented decision between
-(a) KasmVNC's HTTP-only transport if it has one that is good enough, and
-(b) telling the admin to expose the session port directly on a trusted
-network, which is a different product and probably a no.
+### Gemeten 2026-09-09 — het antwoord is ja, maar niet langs de weg die we aannamen
+
+Een echo-websocket op de shim, een echte browser (Chromium via
+Playwright) tegen de lab-stack (NC 32.0.14, AppAPI 5.x, HaRP v0.4.0), en
+twee URL-vormen naast elkaar:
+
+| pad | resultaat |
+|-----|-----------|
+| `/index.php/apps/app_api/proxy/ash_nazg/ws-spike` | **werkt niet** — handshake mislukt (`Unexpected response`), curl hangt en krijgt 0 bytes |
+| `/exapps/ash_nazg/ws-spike` | **werkt** — `101 Switching Protocols`, begroeting, echo, nette sluiting 1000 |
+
+Het interessante aan de mislukking: de ExApp *accepteert* de socket wel
+(`WebSocket /ws-spike [accepted]`, `connection open` in zijn log). De
+upgrade legt de hele weg af; wat niet terugkomt is de 101. Dat is de
+PHP-proxycontroller van AppAPI: PHP kan geen protocol-upgrade
+teruggeven. Die weg is dood voor streaming, hoe hard je ook probeert.
+
+`/exapps/…` gaat niet door PHP. De webserver vóór Nextcloud routeert dat
+pad rechtstreeks naar HaRP, dat het door de FRP-tunnel naar de shim
+duwt. Dezelfde weg die AppAPI zelf voor de heartbeat gebruikt.
+
+**En de toegangscontrole blijft staan op dat pad**, apart nagemeten:
+
+| aanroep | antwoord |
+|---------|----------|
+| `POST /exapps/ash_nazg/selftest` zonder inloggegevens | 403 |
+| idem mét | 200 |
+| websocket vanuit een browser **zonder** sessie | geweigerd (1006) |
+| websocket vanuit een browser **mét** NC-sessie | verbonden, echo, 1000 |
+
+HaRP handhaaft dus het `access_level` uit `info.xml` op deze route, ook
+bij een upgrade. De ADMIN-eis van de streamroute wordt daar afgedwongen;
+de eigenaarscheck blijft werk voor de shim, want HaRP weet niets van
+sessies.
+
+**Gevolgen voor deze change:**
+
+1. De iframe laadt `/exapps/ash_nazg/sessions/{id}/stream/…`, niet de
+   `app_api/proxy`-URL. De rest van de app blijft de proxy-URL gebruiken;
+   alleen de stream wijkt af, en dat verdient een regel commentaar op de
+   plek waar de URL wordt gebouwd.
+2. Een installatie-eis erbij: de webserver vóór Nextcloud MOET `/exapps/*`
+   naar HaRP routeren. Dat is de standaard-HaRP-opstelling (onze stack
+   doet het met Caddy), maar het is nu een harde eis in plaats van een
+   detail — zonder die route is er geen beeld.
+3. De spike is weg. Wat overblijft is deze meting.
 
 ## Why the shim relays instead of AppAPI routing to the session port
 

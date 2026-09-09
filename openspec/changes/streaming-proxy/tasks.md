@@ -4,17 +4,23 @@
 
 Alles hieronder staat of valt hiermee. Niet bouwen voor het antwoord er is.
 
-- [ ] 1.1 Tijdelijke echo-websocket op de shim (`/ws-spike`), route in
+- [x] 1.1 Tijdelijke echo-websocket op de shim (`/ws-spike`), route in
       `info.xml`, uitgerold op de lab-VM.
-- [ ] 1.2 Vanuit een echte browser door de hele keten (Nextcloud → AppAPI-proxy
-      → HaRP → FRP-tunnel → shim): verbinden, heen-en-weer, verbroken zien.
-- [ ] 1.3 Uitkomst vastleggen in `design.md`. Faalt het: stop hier en leg de
-      twee overgebleven opties aan Mark voor. Slaagt het: gooi de spike weg.
+- [x] 1.2 Vanuit een echte browser (Chromium/Playwright) door de hele keten:
+      via `/exapps/ash_nazg/ws-spike` verbonden, begroeting én echo ontvangen,
+      nette sluiting (1000). Via `/index.php/apps/app_api/proxy/…` mislukt de
+      handshake — de ExApp accepteert de socket wél, maar de 101 komt niet
+      terug door de PHP-controller.
+- [x] 1.3 Uitkomst staat in `design.md` (§ *Gemeten 2026-09-09*), inclusief de
+      meting dat HaRP het `access_level` óók bij een upgrade handhaaft: zonder
+      sessie geweigerd, mét sessie verbonden. Spike verwijderd.
 
 ## 2. De relay
 
 - [ ] 2.1 `GET /sessions/{id}/stream/{pad}` proxiet HTTP naar de KasmVNC-poort
-      van die sessie op 127.0.0.1.
+      van die sessie op 127.0.0.1. De browser bereikt dit via
+      `/exapps/ash_nazg/…` (zie §1); de `app_api/proxy`-URL kan geen upgrade
+      dragen.
 - [ ] 2.2 Websocket-upgrade op hetzelfde pad, bidirectioneel, met een nette
       afsluiting als de sessie stopt.
 - [ ] 2.3 Autorisatie vóór de eerste byte: admin (zoals `/run`) én eigenaar van
