@@ -239,8 +239,11 @@ handshake — and *that* is what `--wait-finish` blocks on.
 
 ## 12. Hand-off
 
-- [ ] 12.1 Open `streaming-proxy` change: KasmVNC iframe +
-        websocket proxy through AppAPI's HaRP network.
+- [x] 12.1 `streaming-proxy` staat open: KasmVNC-beeld via een relay in de
+        shim (AppAPI geeft één poort, de sessies zitten erachter),
+        sessie-eigen inloggegevens, en de idle-timeout op echte
+        activiteit. Eerste taak daar is een meting: overleeft een
+        websocket de hele keten? Alles erna hangt daaraan.
 - [ ] 12.2 Archive `wire-dosbox-engine` once §2 (GHCR) is done. §1 en
         §3–§11 zijn groen en een echte run produceert DOSBox-X-uitvoer
         ("ASH NAZG OK", nagemeten in de ExApp-container).
