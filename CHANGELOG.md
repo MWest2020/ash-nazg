@@ -10,6 +10,18 @@ what changed and why.
 
 ## [Unreleased]
 
+### Fixed — 2026-09-09 — dosbox-x engine filled the host disk
+
+The demo engine container wrote 41 GB into its KasmVNC session log in
+twenty minutes and filled the lab host's disk. Cause: with no
+`-nopromptfolder`, dosbox-x asks "You have not selected a valid path…
+y/n:" on stdin; under kasmvncserver stdin is not a terminal, so it
+reads EOF and re-asks at full speed forever. `entrypoint.sh` now passes
+`-nopromptfolder` and an explicit `-defaultdir` in both branches. The
+session log stays at ~36 KB and DOSBox-X actually boots to
+COMMAND.COM. (Its web client answers 401 — KasmVNC's HTTP auth is a
+separate matter, for `streaming-proxy`.)
+
 ### Fixed — 2026-09-09 — wire-dosbox-engine: level-3 green on a real NC 32 + HaRP host
 
 First run of this change against real infrastructure: Nextcloud

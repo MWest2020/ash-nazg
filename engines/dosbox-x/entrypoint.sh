@@ -109,12 +109,21 @@ xsetroot -solid black 2>/dev/null || true
 
 # Working directory = parent of FILE_PATH if set (so the program's
 # relative reads land in the right Files folder).
+# -nopromptfolder is not optional here. Without it dosbox-x asks "You
+# have not selected a valid path. … y/n:" on stdin, which under
+# kasmvncserver is not a terminal: it reads EOF and asks again,
+# forever, at full speed. That loop wrote 41 GB into the KasmVNC
+# session log in twenty minutes and filled the host's disk.
+# -defaultdir names the working directory explicitly so there is
+# nothing to prompt about.
 if [ -n "${FILE_PATH:-}" ] && [ -f "${FILE_PATH}" ]; then
-    cd "$(dirname "${FILE_PATH}")"
-    exec dosbox-x "${FILE_PATH}"
+    FILE_DIR="$(dirname "${FILE_PATH}")"
+    cd "${FILE_DIR}"
+    exec dosbox-x -nopromptfolder -defaultdir "${FILE_DIR}" "${FILE_PATH}"
 else
     # Smoke-test path. No file → bare DOS prompt.
-    exec dosbox-x
+    cd "${HOME}" || cd /tmp
+    exec dosbox-x -nopromptfolder -defaultdir "${PWD}"
 fi
 XSTARTUP
 chmod 755 "${HOME}/.vnc/xstartup"
