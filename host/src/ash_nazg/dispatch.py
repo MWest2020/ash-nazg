@@ -22,6 +22,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
+import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
@@ -33,10 +34,16 @@ from ash_nazg.engines.registry import EngineRegistry
 
 logger = logging.getLogger(__name__)
 
+
+def _now() -> float:
+    """Monotonic seconds — a wall clock that jumps must not end sessions."""
+    return time.monotonic()
+
 DEFAULT_MAX_FILE_BYTES: Final[int] = 100 * 1024 * 1024  # 100 MB per spec default
 # Sandbox spec, "Engine session lifecycle bounded": maximum session
-# duration, default 4 hours.
+# duration, default 4 hours, and the idle window, default 15 minutes.
 DEFAULT_MAX_SESSION_SECONDS: Final[float] = 4 * 60 * 60
+DEFAULT_IDLE_SECONDS: Final[float] = 900
 
 
 # --- Protocols injected by main.py ---------------------------------------
@@ -158,6 +165,8 @@ class Dispatcher:
         active_sessions: ActiveSessionTracker | None = None,
         max_file_bytes: int = DEFAULT_MAX_FILE_BYTES,
         max_session_seconds: float = DEFAULT_MAX_SESSION_SECONDS,
+        idle_seconds: float = DEFAULT_IDLE_SECONDS,
+        watch_interval_s: float = 15.0,
     ) -> None:
         self.registry = registry
         self.file_reader = file_reader
@@ -166,9 +175,12 @@ class Dispatcher:
         self.active = active_sessions or ActiveSessionTracker()
         self.max_file_bytes = max_file_bytes
         self.max_session_seconds = max_session_seconds
-        # Expiry timers, kept referenced so the loop cannot collect them
-        # mid-flight.
+        self.idle_seconds = idle_seconds
+        self.watch_interval_s = watch_interval_s
+        # Lifetime watchers, kept referenced so the loop cannot collect
+        # them mid-flight, and the clock each one reads.
         self._expiries: set[asyncio.Task[None]] = set()
+        self._last_activity: dict[str, float] = {}
 
     async def dispatch(
         self,
@@ -348,6 +360,7 @@ class Dispatcher:
         if callable(terminate):
             await terminate(session_id)
         self.active.release(*owner)
+        self._last_activity.pop(session_id, None)
         await self._audit(
             "closed",
             user_id=user_id,
@@ -356,24 +369,46 @@ class Dispatcher:
         )
         return True
 
-    def _schedule_expiry(self, session_id: str, user_id: str, files_path: str) -> None:
-        """Bound the session's lifetime (sandbox spec, max session duration).
+    def note_activity(self, session_id: str) -> None:
+        """Called by the stream relay for every frame it carries.
 
-        The claim on (user, file) is what makes a second Run return 409,
-        so it has to be released when the session ends — otherwise a user
-        who runs a file once can never run it again.
+        The relay is the only place that can see whether anyone is
+        watching; the dispatcher must not guess at a signal it cannot
+        observe.
         """
+        if session_id in self._last_activity:
+            self._last_activity[session_id] = _now()
 
-        async def _expire() -> None:
-            await asyncio.sleep(self.max_session_seconds)
-            if await self.close(session_id, user_id=user_id):
-                logger.info(
-                    "session %s hit the %.0fs maximum duration and was closed",
-                    session_id,
-                    self.max_session_seconds,
-                )
+    def _schedule_expiry(self, session_id: str, user_id: str, files_path: str) -> None:
+        """Bound the session's lifetime: idle window and maximum duration.
 
-        task = asyncio.create_task(_expire())
+        Both end the session the same way an explicit close does. That
+        matters for the claim on (user, file): it is what makes a second
+        Run return 409, so a session that ends without releasing it would
+        lock the user out of that file for the life of the host.
+
+        A session nobody has attached to yet counts as idle from the
+        moment it started — which is correct: nothing is watching it.
+        """
+        started = _now()
+        self._last_activity[session_id] = started
+
+        async def _watch() -> None:
+            while True:
+                await asyncio.sleep(self.watch_interval_s)
+                now = _now()
+                last = self._last_activity.get(session_id, started)
+                if now - started >= self.max_session_seconds:
+                    reason = f"the {self.max_session_seconds:.0f}s maximum duration"
+                elif now - last >= self.idle_seconds:
+                    reason = f"{self.idle_seconds:.0f}s without traffic"
+                else:
+                    continue
+                if await self.close(session_id, user_id=user_id):
+                    logger.info("session %s closed: %s", session_id, reason)
+                return
+
+        task = asyncio.create_task(_watch())
         self._expiries.add(task)
         task.add_done_callback(self._expiries.discard)
 

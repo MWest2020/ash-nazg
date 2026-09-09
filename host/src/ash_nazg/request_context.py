@@ -18,7 +18,7 @@ import logging
 from dataclasses import dataclass
 from typing import Final
 
-from fastapi import Request
+from fastapi import Request, WebSocket
 
 logger = logging.getLogger(__name__)
 
@@ -31,8 +31,12 @@ class RequestUser:
     is_admin: bool
 
 
-def extract_user(request: Request, *, admin_route: bool) -> RequestUser:
+def extract_user(request: Request | WebSocket, *, admin_route: bool) -> RequestUser:
     """Extract the user identity that AppAPI passed in.
+
+    Accepts a WebSocket as well as a Request: HaRP sets the same header
+    on an upgrade, and the stream route needs the caller before it
+    accepts the socket.
 
     `admin_route` tells us whether the AppAPI route the request landed
     on is declared ADMIN. If yes, we trust the gating and return

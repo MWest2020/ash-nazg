@@ -246,6 +246,40 @@ else
     exit 1
 fi
 run_port="$(echo "${rerun}" | sed -n 's/.*"port":\([0-9]*\).*/\1/p')"
+# From here on the live session is the second one; the first is closed.
+session_id="$(echo "${rerun}" | sed -n 's/.*"session_id":"\([^"]*\)".*/\1/p')"
+
+log "asserting the stream reaches through the relay …"
+# The relay adds the session's own credentials; without them KasmVNC
+# answers 401, so a 200 here proves both the authorisation and the
+# forwarding.
+stream_base="${PROXY_EXAPPS:-http://localhost:8088/exapps/ash_nazg}/sessions/${session_id}/stream"
+client="$(curl -fsS -u "${NC_AUTH}" "${stream_base}/vnc.html" 2>/dev/null || true)"
+if echo "${client}" | grep -qi "KasmVNC"; then
+    ok "  the VNC web client is served through the relay"
+else
+    err "  the relay did not serve the client: $(echo "${client}" | head -c 120)"
+    exit 1
+fi
+
+log "asserting the websocket upgrade survives the chain …"
+# Not through /index.php/apps/app_api/proxy/…: that is a PHP controller
+# and cannot return 101. Two headers a real client sends are not optional
+# either — without Origin, or without the `binary` subprotocol, KasmVNC
+# answers a bare 404 that reads like a wrong path.
+upgrade="$(curl -sS -i -m 8 -u "${NC_AUTH}" \
+    -H "Connection: Upgrade" -H "Upgrade: websocket" \
+    -H "Sec-WebSocket-Version: 13" \
+    -H "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==" \
+    -H "Origin: http://localhost:8088" \
+    -H "Sec-WebSocket-Protocol: binary" \
+    "${stream_base}/websockify" 2>/dev/null | head -1 || true)"
+if echo "${upgrade}" | grep -q "101"; then
+    ok "  websocket upgrade returns 101 through the relay"
+else
+    err "  no upgrade through the relay: ${upgrade:-<niets>}"
+    exit 1
+fi
 
 log "asserting KasmVNC answers on the session port …"
 vnc_code="$(docker exec "${EXAPP_CONTAINER}" \
@@ -279,9 +313,13 @@ What this proves:
     downloaded into a private session directory and executed by
     DOSBox-X inside the ExApp, with KasmVNC listening on the session's
     port.
+  - The stream reaches through the relay: the VNC web client is served
+    with the session's own credentials, and a websocket upgrade returns
+    101 over the /exapps path.
 
 What this still does NOT prove:
-  - That a user can SEE the session. The stream reaches the browser
-    only once `streaming-proxy` routes KasmVNC through the AppAPI
-    proxy; this asserts the port answers, not that a picture arrives.
+  - That the picture actually paints in a browser. curl can prove the
+    relay; only a browser can prove the client. Run
+    `scripts/e2e-playwright/verify-stream.js` for that — it asserts the
+    canvas carries the session screen, and leaves a screenshot.
 EOF

@@ -38,8 +38,24 @@ def load_manifest() -> dict[str, dict[str, object]] | None:
         return None
 
 
+def relative_base(path: str) -> str:
+    """How many levels up from `path` the app's own root is.
+
+    The pages the app renders are reached through a proxy prefix it can
+    neither see nor guess (`/index.php/apps/app_api/proxy/ash_nazg/…` in
+    one case, `/exapps/ash_nazg/…` in another). An absolute `/static/…`
+    URL therefore resolves against Nextcloud's root and 404s. A relative
+    one resolves against whatever prefix the browser used.
+    """
+    segments = [s for s in path.split("/") if s]
+    depth = len(segments) if path.endswith("/") else len(segments) - 1
+    return "../" * max(depth, 0)
+
+
 def bundle_tags(
-    manifest: dict[str, dict[str, object]] | None, entry_key: str
+    manifest: dict[str, dict[str, object]] | None,
+    entry_key: str,
+    base: str = "",
 ) -> str:
     """Render the <script> + <link rel=stylesheet> tags for one entry."""
     if manifest is None:
@@ -65,11 +81,11 @@ def bundle_tags(
             if isinstance(css, str):
                 parts.append(
                     f'<link rel="stylesheet" '
-                    f'href="/static/{html.escape(css, quote=True)}">'
+                    f'href="{base}static/{html.escape(css, quote=True)}">'
                 )
     if isinstance(js_file, str):
         parts.append(
             f'<script type="module" '
-            f'src="/static/{html.escape(js_file, quote=True)}"></script>'
+            f'src="{base}static/{html.escape(js_file, quote=True)}"></script>'
         )
     return "\n        ".join(parts)

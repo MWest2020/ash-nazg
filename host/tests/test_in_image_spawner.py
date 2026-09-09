@@ -9,6 +9,7 @@ real, without an emulator.
 
 from __future__ import annotations
 
+import asyncio
 import os
 import shutil
 from pathlib import Path
@@ -66,7 +67,7 @@ LISTENER = (
 
 def _spawner(tmp_path: Path, script: str, **kwargs) -> InImageSpawner:
     reader = InMemoryFileReader({"/Programs/keen1.exe": MZ_HEAD})
-    return InImageSpawner(
+    spawner = InImageSpawner(
         file_reader=reader,
         engine_script=script,
         sessions_root=tmp_path / "sessions",
@@ -74,6 +75,15 @@ def _spawner(tmp_path: Path, script: str, **kwargs) -> InImageSpawner:
         readiness_timeout_s=10.0,
         **kwargs,
     )
+
+    # `kasmvncpasswd` lives in the runtime image, not on a test runner.
+    # Everything about the secret except the tool call is still exercised.
+    async def fake_password_file(path: Path, secret: str) -> None:
+        path.write_text(f"session:{secret}\n")
+        path.chmod(0o600)
+
+    spawner._write_password_file = fake_password_file
+    return spawner
 
 
 @pytest.fixture
@@ -198,3 +208,85 @@ async def test_session_environment_excludes_the_app_secret(tmp_path: Path) -> No
 
     assert "super-secret-value" not in env_dump
     assert "FILE_PATH=" in env_dump
+
+
+@pytest.mark.asyncio
+async def test_each_session_gets_its_own_credentials(tmp_path: Path) -> None:
+    """A password baked into the image is the same on every install and
+    survives redeployment; these are per session and die with it."""
+    spawner = _spawner(tmp_path, _script(tmp_path, LISTENER))
+
+    await spawner.spawn(
+        session_id="s-1", config=_config(), file_meta=_meta(), user_id="alice"
+    )
+    await spawner.spawn(
+        session_id="s-2", config=_config(), file_meta=_meta(), user_id="bob"
+    )
+
+    first = spawner.credentials_for("s-1")
+    second = spawner.credentials_for("s-2")
+    assert first is not None and second is not None
+    assert first[1] != second[1]
+    assert len(first[1]) >= 20
+
+    password_file = tmp_path / "sessions" / "s-1" / "kasmpasswd"
+    assert password_file.stat().st_mode & 0o777 == 0o600
+
+    await spawner.terminate("s-1")
+    # Gone with the session: no credential outlives what it protected.
+    assert spawner.credentials_for("s-1") is None
+    assert not password_file.exists()
+
+    await spawner.terminate_all()
+
+
+@pytest.mark.asyncio
+async def test_port_and_credentials_are_unknown_for_unknown_sessions(
+    tmp_path: Path,
+) -> None:
+    spawner = _spawner(tmp_path, _script(tmp_path, LISTENER))
+
+    assert spawner.port_for("nooit-bestaan") is None
+    assert spawner.credentials_for("nooit-bestaan") is None
+
+
+@pytest.mark.asyncio
+async def test_terminate_takes_the_whole_process_tree(tmp_path: Path) -> None:
+    """`kasmvncserver` is a launcher: it starts Xvnc and returns, and Xvnc
+    starts the emulator. Signalling only the child left both alive; the
+    next session then found its port already open, attached to the
+    previous session's server, and answered 401 with the wrong
+    credentials. So termination has to take the group."""
+    marker = tmp_path / "grandchild-alive"
+    # The child spawns a grandchild that outlives it and keeps a file
+    # locked open, then the child itself exits — exactly the shape that
+    # used to survive.
+    script = _script(
+        tmp_path,
+        f'python3 -c "'
+        f"import os,socket,time,sys;"
+        f"s=socket.socket();s.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1);"
+        f"s.bind(('127.0.0.1',int(os.environ['VNC_WEBSOCKET_PORT'])));s.listen(1);"
+        f"open('{marker}','w').write(str(os.getpid()));"
+        f"time.sleep(300)"
+        f'" &\nwait\n',
+    )
+    spawner = _spawner(tmp_path, script)
+
+    await spawner.spawn(
+        session_id="s-1", config=_config(), file_meta=_meta(), user_id="alice"
+    )
+    grandchild = int(marker.read_text())
+    os.kill(grandchild, 0)  # raises if it is not running
+
+    await spawner.terminate("s-1")
+
+    # Give the signal a moment to land, then insist it is gone.
+    for _ in range(20):
+        try:
+            os.kill(grandchild, 0)
+        except OSError:
+            break
+        await asyncio.sleep(0.1)
+    else:
+        pytest.fail("the grandchild survived terminate()")

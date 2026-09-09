@@ -34,6 +34,9 @@ set -euo pipefail
 # the one-container-per-session path byte-identical to before.
 : "${VNC_WEBSOCKET_PORT:=}"
 : "${XSTARTUP_PATH:=${HOME}/.vnc/xstartup}"
+# Elke sessie zijn eigen wachtwoordbestand; leeg = het bestand in HOME, wat
+# de losse engine-image (één sessie per container) gebruikt.
+: "${VNC_PASSWORD_FILE:=}"
 mkdir -p "${HOME}/.vnc"
 chmod 700 "${HOME}/.vnc"
 
@@ -133,6 +136,19 @@ fi
 XSTARTUP
 chmod 755 "${XSTARTUP_PATH}"
 
+# KasmVNC's first-run wizard looks at ~/.kasmpasswd, not at the file we
+# pass with -KasmPasswordFile: without it, it starts prompting for a user
+# on a stdin that is not a terminal and dies in TextUI.pm. So make sure
+# one exists — with a secret nobody knows, generated here rather than
+# baked into the image. Sessions authenticate with their own file; this
+# one is only there to keep the wizard quiet.
+if [ ! -f "${HOME}/.kasmpasswd" ]; then
+    onbruikbaar="$(head -c 24 /dev/urandom | base64 | tr -d '\n')"
+    printf '%s\n%s\n\n' "${onbruikbaar}" "${onbruikbaar}" \
+        | kasmvncpasswd -u placeholder -wo "${HOME}/.kasmpasswd" >/dev/null 2>&1 || true
+    unset onbruikbaar
+fi
+
 # Skip KasmVNC's interactive desktop-environment prompt — it looks
 # for this sentinel file. Without it the first-run wizard runs
 # `select-de.sh` interactively, which fails without a TTY.
@@ -163,6 +179,10 @@ kasm_args=(
 # needs to know it up front to hand a URL back to the browser.
 if [ -n "${VNC_WEBSOCKET_PORT}" ]; then
     kasm_args+=(-websocketPort "${VNC_WEBSOCKET_PORT}")
+fi
+# Per-sessie inloggegevens in plaats van het in het image gebakken account.
+if [ -n "${VNC_PASSWORD_FILE}" ]; then
+    kasm_args+=(-KasmPasswordFile "${VNC_PASSWORD_FILE}")
 fi
 
 exec kasmvncserver "${kasm_args[@]}"

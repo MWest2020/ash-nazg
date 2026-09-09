@@ -11,10 +11,10 @@ from __future__ import annotations
 import html
 from typing import Final
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse
 
-from ash_nazg.bundle import bundle_tags, load_manifest
+from ash_nazg.bundle import bundle_tags, load_manifest, relative_base
 
 SESSION_ENTRY_KEY: Final[str] = "src/session-status-main.ts"
 
@@ -22,7 +22,7 @@ router = APIRouter(tags=["dispatch"])
 
 
 @router.get("/sessions/{session_id}", response_class=HTMLResponse)
-async def session_page(session_id: str) -> HTMLResponse:
+async def session_page(session_id: str, request: Request) -> HTMLResponse:
     """Render the session HTML shell.
 
     The id is passed as a data attribute rather than interpolated into
@@ -39,7 +39,7 @@ async def session_page(session_id: str) -> HTMLResponse:
 </head>
 <body>
     <div id="ash-nazg-session" data-session-id="{safe_id}"></div>
-    {bundle_tags(manifest, SESSION_ENTRY_KEY)}
+    {bundle_tags(manifest, SESSION_ENTRY_KEY, relative_base(request.url.path))}
 </body>
 </html>
 """

@@ -65,6 +65,16 @@ from ash_nazg.spawners import (
     InImageSpawner,
     stub_spawner_from_env,
 )
+from ash_nazg.stream_proxy import router as stream_proxy_router
+
+# uvicorn configures its own loggers and leaves the root logger alone, so
+# without this the app's own log lines never appear anywhere — which turns
+# every production question into a rebuild. Level via env so an admin can
+# turn it down without a new image.
+logging.basicConfig(
+    level=os.environ.get("ASH_NAZG_LOG_LEVEL", "INFO").upper(),
+    format="%(levelname)s %(name)s: %(message)s",
+)
 
 logger = logging.getLogger(__name__)
 
@@ -212,6 +222,7 @@ app.include_router(selftest_router)
 app.include_router(admin_settings_router)
 app.include_router(files_action_router)
 app.include_router(session_page_router)
+app.include_router(stream_proxy_router)
 
 # Serve the vite-built frontend bundle. The directory may not exist
 # on a fresh checkout; only mount when present so the app still starts

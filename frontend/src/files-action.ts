@@ -95,9 +95,12 @@ const action: IFileAction = {
 				generateUrl(`/apps/app_api/proxy/${APP_ID}/run`),
 				{ path: node.path },
 			)
-			window.location.href = generateUrl(
-				`/apps/app_api/proxy/${APP_ID}/sessions/${data.session_id}`,
-			)
+			// Not the app_api proxy: that serves the page with Nextcloud's
+			// own Content-Security-Policy, which refuses our bundle (no
+			// nonce), and it cannot carry the stream's websocket either.
+			// `/exapps/<appid>/…` is routed straight to the deploy daemon,
+			// with the route's ADMIN level still enforced.
+			window.location.href = `/exapps/${APP_ID}/sessions/${data.session_id}`
 		} catch (error) {
 			// Surface what the host said — 415 for an unsupported format,
 			// 409 for a file already running, and so on. Never "something

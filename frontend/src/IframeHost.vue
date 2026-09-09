@@ -1,60 +1,81 @@
 <script setup lang="ts">
 /*
- * Ash Nazg — placeholder for the KasmVNC iframe host component.
+ * Ash Nazg — the session's screen.
  *
- * SCAFFOLD: renders a labelled placeholder block. The real component
- * (websocket plumbing, KasmVNC client, error overlay) lands in the
- * `streaming-proxy` change. That change adds the @nextcloud/dialogs
- * `showError` import for in-iframe error display — intentionally not
- * pre-imported here (re-exporting from <script setup> is not allowed
- * by Vue 3, and an unused import would itself trip the linter).
+ * KasmVNC's own web client in an iframe. Everything it loads — the page,
+ * its assets, the websocket — goes through the app's stream relay, which
+ * adds the session's credentials; nothing secret travels in a URL.
+ *
+ * The URL is deliberately not the `app_api/proxy` one the rest of the app
+ * uses. That proxy is a PHP controller and cannot return `101 Switching
+ * Protocols`, so the websocket handshake dies in it. `/exapps/<appid>/…`
+ * is routed straight to HaRP by the web server in front of Nextcloud and
+ * carries the upgrade end to end, with the route's ADMIN level still
+ * enforced. Measured; see the streaming-proxy change's design.md.
  */
+
+import { computed, ref } from 'vue'
 
 import { translate as t } from '@nextcloud/l10n'
 
-defineProps<{
+import NcNoteCard from '@nextcloud/vue/components/NcNoteCard'
+
+const APP_ID = 'ash_nazg'
+
+const props = defineProps<{
 	sessionId: string
-	streamUrl: string
+	ended?: boolean
 }>()
+
+const failed = ref<boolean>(false)
+
+const streamUrl = computed(() => {
+	const base = `/exapps/${APP_ID}/sessions/${props.sessionId}/stream`
+	// `path` is not optional. KasmVNC's client builds its websocket URL
+	// from this setting relative to the ORIGIN, defaulting to
+	// `websockify` — which lands on Nextcloud's root, where nothing
+	// answers, and the client sits on its connect screen without ever
+	// attempting a connection. It has to be told the relayed path.
+	const path = encodeURIComponent(
+		`exapps/${APP_ID}/sessions/${props.sessionId}/stream/websockify`,
+	)
+	// `resize=scale`, not `remote`: the emulator's screen is a fixed
+	// 1280x800 and asking the server to match the iframe would crop it.
+	// Scaling fits the whole screen in whatever space the page gives it.
+	return `${base}/vnc.html?autoconnect=true&reconnect=true&resize=scale&path=${path}`
+})
 </script>
 
 <template>
-	<div class="ash-nazg-iframe-host" data-testid="iframe-host-placeholder">
-		<dl class="ash-nazg-iframe-host__meta">
-			<dt>{{ t('ash_nazg', 'session') }}</dt>
-			<dd>{{ sessionId }}</dd>
-			<dt>{{ t('ash_nazg', 'stream') }}</dt>
-			<dd>{{ streamUrl }}</dd>
-		</dl>
+	<div class="ash-nazg-iframe-host">
+		<NcNoteCard v-if="ended" type="info">
+			{{ t('ash_nazg', 'This session has ended.') }}
+		</NcNoteCard>
+		<NcNoteCard v-else-if="failed" type="error">
+			{{ t('ash_nazg', 'The screen could not be loaded. The session may have ended.') }}
+		</NcNoteCard>
+		<iframe v-else
+			:src="streamUrl"
+			:title="t('ash_nazg', 'Session screen')"
+			class="ash-nazg-iframe-host__frame"
+			allow="clipboard-read; clipboard-write"
+			@error="failed = true" />
 	</div>
 </template>
 
 <style scoped>
 .ash-nazg-iframe-host {
-	display: flex;
-	flex-direction: column;
-	gap: 8px;
-	padding: 16px;
-	border: 1px dashed var(--color-border);
+	width: 100%;
+}
+
+.ash-nazg-iframe-host__frame {
+	display: block;
+	width: 100%;
+	/* The emulator is 1280x800; keep its shape rather than letterboxing
+	   it inside a fixed height. */
+	aspect-ratio: 16 / 10;
+	border: 1px solid var(--color-border);
 	border-radius: var(--border-radius);
-	background: var(--color-background-hover);
-}
-
-.ash-nazg-iframe-host__meta {
-	display: grid;
-	grid-template-columns: max-content 1fr;
-	column-gap: 12px;
-	row-gap: 4px;
-	margin: 0;
-	font-family: var(--font-face-monospace, monospace);
-	font-size: 0.9em;
-}
-
-.ash-nazg-iframe-host__meta dt {
-	color: var(--color-text-maxcontrast);
-}
-
-.ash-nazg-iframe-host__meta dd {
-	margin: 0;
+	background: #000;
 }
 </style>

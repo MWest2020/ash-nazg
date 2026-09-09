@@ -65,6 +65,7 @@ container's CPU.
 | Concurrent sessions         | 8                                    | `specs/sandbox/spec.md` → *Session resources are bounded by what the runtime offers*        |
 | Scheduling priority         | nice +10 relative to the shim        | same requirement, scenario *A session cannot starve the shim*                              |
 | Maximum session duration    | 4 h                                  | `specs/engines/spec.md` → *Engine session lifecycle bounded*                                |
+| Idle window                 | 900 s without stream traffic         | same requirement; measured by the relay, the only place that sees it                        |
 | Writable surface            | one private 0700 session directory   | `specs/sandbox/spec.md` → *A session writes only inside its own directory*                  |
 | Termination                 | SIGTERM, 30 s grace, then SIGKILL    | `specs/engines/spec.md` → *Engine session lifecycle bounded*                                |
 
@@ -77,10 +78,11 @@ out of the session's environment as hygiene, not as a boundary. Hard
 resource isolation returns when each engine becomes its own ExApp, which
 AppAPI deploys and the deploy daemon limits.
 
-Idle-based termination is not implemented: the host cannot see the
-session's websocket traffic, and claiming an idle timeout it cannot
-observe would be worse than not claiming one. It arrives with
-`streaming-proxy`, which does see that traffic.
+Idle termination is real since `streaming-proxy`: the stream passes
+through the host's own relay, so "nobody is watching" is something it
+observes rather than guesses. The clock resets on every frame in either
+direction, and when it runs out the session ends the same way an
+explicit close does — same path, same claim release.
 
 ### Layer 3 — The session sees one file
 
@@ -93,6 +95,8 @@ emulator there.
 | A session can reach only the binary it was asked to run. | `specs/sandbox/spec.md` → *A session writes only inside its own directory*, scenario *The session sees one file* |
 | The directory is removed when the session ends.          | same requirement, scenario *Session directory removed on close*                              |
 | No mount privileges are needed at all.                   | There is no davfs2 mount; the download uses the shim's own WebDAV client.                     |
+| Viewing credentials belong to one session.               | `specs/sandbox/spec.md` → *Session viewing credentials are per session*. Generated at spawn, written 0600 into the session directory, gone with it. The image carries no password. |
+| Only the session's owner can watch it.                   | `specs/nextcloud-frontend/spec.md` → *A session stream is reachable only by its owner*. Checked before the upgrade; "not yours" and "does not exist" both answer 404. |
 
 This is a narrower grant than the per-session WebDAV token the earlier
 design described: the session never holds a credential, because it never
@@ -211,3 +215,30 @@ See `SECURITY.md`. TL;DR: GitHub private security advisories,
 90-day coordinated disclosure, in-scope = host shim, engine
 containers, frontend, manifest. Out of scope = admin-required
 attacks, upstream-tracked CVEs.
+
+## 5. The stream, and what it does and does not open up
+
+The screen reaches the browser through a relay in the app: AppAPI gives
+an ExApp one port, and the sessions listen behind it, so nothing else
+can bridge the two. Three things about that are worth an administrator's
+attention.
+
+**It rides the same door as everything else.** The stream is reached at
+`/exapps/<appid>/…`, which the web server in front of Nextcloud routes to
+the deploy daemon, and the daemon enforces the route's ADMIN level there
+exactly as it does for the rest of the app. No port is published, and
+nothing is exposed that Nextcloud does not gate. (The `app_api/proxy`
+URL the rest of the app uses cannot carry a websocket at all: it is a
+PHP controller and cannot return `101 Switching Protocols`.)
+
+**The relay authorises before it forwards a byte.** Admin, as for
+`/run`, and the session's owner. A session id is not a capability: ask
+for someone else's session and the answer is the same 404 as for one
+that does not exist, so the endpoint cannot be used to discover ids.
+
+**What the relay does not do** is inspect the stream. It shuttles frames
+and stamps an activity clock; it does not parse RFB, does not filter
+what the emulator draws, and does not sit between the emulator and its
+own credentials. If DOSBox-X is compromised, the relay is not what
+stops the attacker — that remains the emulator boundary described in
+Layer 2.

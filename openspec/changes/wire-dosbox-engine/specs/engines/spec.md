@@ -82,10 +82,9 @@ SHALL release the (user, file) claim that makes a second Run of the same
 file return 409 — a session that ends without releasing its claim would
 lock the user out of that file for the life of the host.
 
-Idle-based termination SHALL apply once the streaming layer reports
-per-session activity; the host cannot observe websocket traffic that
-does not pass through it, and inventing an idle signal it does not have
-would be worse than not claiming one.
+Idle-based termination SHALL apply: the stream passes through the host's
+own relay, which reports per-session activity, so the idle window is
+measured where it is actually observable rather than guessed.
 
 #### Scenario: Maximum duration enforced
 
@@ -96,14 +95,11 @@ would be worse than not claiming one.
 
 #### Scenario: Idle timeout enforced
 
-- **GIVEN** a session whose stream passes through the host, and which has
-  carried no traffic for the configured idle window
+- **GIVEN** a session that has carried no stream traffic in either
+  direction for the configured idle window
 - **WHEN** the window elapses
 - **THEN** the host SHALL terminate the session the same way an explicit
-  close does
-- **AND** where no stream passes through the host, there is no idle
-  signal and this scenario does not apply — the maximum duration is what
-  bounds the session.
+  close does, releasing its claim.
 
 #### Scenario: Host restart cleans up engines
 

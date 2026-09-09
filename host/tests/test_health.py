@@ -76,3 +76,15 @@ def test_admin_settings_renders_html_shell() -> None:
     assert ("/static/js/admin-settings-" in body) or (
         "Frontend bundle not built yet" in body
     )
+
+
+def test_pages_reference_their_assets_relative_to_the_proxy_prefix() -> None:
+    """The app is reached through a proxy prefix it cannot see. An
+    absolute /static/... URL resolves against Nextcloud's root and 404s,
+    which leaves the page rendered but the Vue app never mounted."""
+    client = TestClient(app)
+
+    for path in ("/admin/settings", "/sessions/abc-123"):
+        body = client.get(path).text
+        assert 'src="/static/' not in body, path
+        assert 'href="/static/' not in body, path

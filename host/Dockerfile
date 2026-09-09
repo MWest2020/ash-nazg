@@ -175,13 +175,16 @@ COPY host/start.sh     /start.sh
 COPY engines/dosbox-x/entrypoint.sh /usr/local/bin/ash-nazg-engine
 RUN chmod +x /start.sh /usr/local/bin/ash-nazg-engine
 
-# Pre-create the KasmVNC password file the first-run wizard would
-# otherwise prompt for (it deadlocks without a TTY), and the sentinel
-# that skips the desktop-environment question.
+# The sentinel that skips KasmVNC's first-run desktop-environment
+# question (it prompts interactively and deadlocks without a TTY).
+#
+# Deliberately NO password file here. Every session gets its own, written
+# into its own directory at spawn time. A file baked in at build time
+# would be the same secret on every install, would survive redeployment,
+# and — worse — would silently accept connections when a session's own
+# file failed to appear, turning a bug into a shared password.
 USER app
 RUN mkdir -p /home/app/.vnc /home/app/.local/share \
-    && printf 'ash_nazg\nash_nazg\n\n' \
-        | kasmvncpasswd -u demo -wo /home/app/.kasmpasswd \
     && touch /home/app/.vnc/.de-was-selected
 USER root
 

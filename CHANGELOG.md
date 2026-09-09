@@ -10,6 +10,66 @@ what changed and why.
 
 ## [Unreleased]
 
+### Added — 2026-09-09 — streaming-proxy: the session's screen, in the browser
+
+A Run now shows you the emulator. The session page carries KasmVNC's own
+web client in an iframe, fed by a relay in the app — AppAPI hands an
+ExApp one port and the sessions listen behind it, so nothing else can
+bridge the two.
+
+Proven in a real browser against NC 32.0.14 + AppAPI 5.x + HaRP v0.4.0:
+the DOS fixture from `scripts/make-dos-fixture.py` runs, and its output
+(`ASH NAZG OK`) is legible on screen in Nextcloud.
+`scripts/e2e-playwright/verify-stream.js` asserts the canvas carries the
+session screen and leaves a screenshot; the level-3 verifier asserts the
+relay itself (client served with the session's credentials, upgrade
+returns 101).
+
+- **The relay** (`stream_proxy.py`) forwards HTTP and websocket frames
+  to the session's VNC server and nothing more — no RFB, no client, no
+  inspection. It authorises before it forwards a byte: admin, as for
+  `/run`, and the session's owner. Someone else's session and a session
+  that never existed both answer 404, so the endpoint cannot be used to
+  discover session ids.
+- **Per-session credentials.** The spawner generates a secret per
+  session, writes it 0600 into the session's own directory and passes it
+  to KasmVNC; the relay adds it, so it never travels in a URL. No
+  password is baked into the image any more — a build-time one would be
+  identical on every install and would silently accept connections when
+  a session's own file failed to appear.
+- **Idle termination is real.** The relay is the only thing that sees
+  whether anyone is watching, so it stamps the clock; 900 s without
+  traffic ends the session the same way an explicit close does, claim
+  release included. The `engines` spec's conditional wording is now
+  unconditional.
+- **The app logs its own lines.** uvicorn configures its loggers and
+  leaves the root logger alone, so nothing the app logged ever appeared —
+  which turned every production question into a rebuild.
+
+Five things the build turned up that no design predicted, all measured:
+
+- KasmVNC answers a websocket upgrade **without an `Origin` header** with
+  a bare **404** — not 400, not 403 — which sends you hunting for the
+  wrong path. The `binary` subprotocol is required too.
+- Its client never connects without **`path=`**: it builds the websocket
+  URL from the origin, not from the page, and sits silently on its
+  connect screen.
+- The session page had to move off the `app_api/proxy` URL: Nextcloud
+  serves it with its own CSP, which refuses our bundle (no nonce). Both
+  the page and the stream now use `/exapps/<appid>/…`, which also is the
+  only path that can carry an upgrade at all.
+- Page assets were absolute (`/static/…`) and resolved against
+  Nextcloud's root: the page rendered, the Vue app never mounted. They
+  are relative to the proxy prefix now — the admin page had the same
+  latent bug.
+- Closing a session left KasmVNC running: `kasmvncserver` is a launcher
+  that starts Xvnc and returns. The next session then found its port
+  already open, attached to the previous session's server and answered
+  401 with mismatched credentials. Sessions now run in their own process
+  group, are stopped with `kasmvncserver -kill` plus a group sweep, and
+  their display lock is cleared.
+
+
 ### Added — 2026-09-09 — the Run flow works: engine in the app image
 
 Mark's decision on the open spawn question: the engine ships in the same

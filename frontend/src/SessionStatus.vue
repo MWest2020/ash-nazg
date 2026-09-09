@@ -12,12 +12,13 @@
 import { ref } from 'vue'
 
 import axios from '@nextcloud/axios'
-import { generateUrl } from '@nextcloud/router'
 import { showError, showSuccess } from '@nextcloud/dialogs'
 import { translate as t } from '@nextcloud/l10n'
 
 import NcButton from '@nextcloud/vue/components/NcButton'
 import NcNoteCard from '@nextcloud/vue/components/NcNoteCard'
+
+import IframeHost from './IframeHost.vue'
 
 const APP_ID = 'ash_nazg'
 const ENGINE_NAME = 'dosbox-x'
@@ -33,8 +34,11 @@ const closing = ref<boolean>(false)
  *
  * @param path route path on the app, e.g. `/sessions/abc`
  */
-function proxyUrl(path: string): string {
-	return generateUrl(`/apps/app_api/proxy/${APP_ID}${path}`)
+function appUrl(path: string): string {
+	// This page is served from /exapps/<appid>/… (see files-action.ts), so
+	// its own calls go there too: the app_api proxy would want a Nextcloud
+	// requesttoken this bare page does not have.
+	return `/exapps/${APP_ID}${path}`
 }
 
 /**
@@ -43,7 +47,7 @@ function proxyUrl(path: string): string {
 async function closeSession(): Promise<void> {
 	closing.value = true
 	try {
-		await axios.delete(proxyUrl(`/sessions/${sessionId.value}`))
+		await axios.delete(appUrl(`/sessions/${sessionId.value}`))
 		closed.value = true
 		showSuccess(t(APP_ID, 'Session closed.'))
 	} catch (error) {
@@ -65,9 +69,8 @@ async function closeSession(): Promise<void> {
 		<NcNoteCard v-if="closed" type="success">
 			{{ t(APP_ID, 'This session has been closed. You can run the file again.') }}
 		</NcNoteCard>
-		<NcNoteCard v-else type="info">
-			{{ t(APP_ID, 'The session is running inside the app container.') }}
-		</NcNoteCard>
+
+		<IframeHost :session-id="sessionId" :ended="closed" />
 
 		<dl>
 			<dt>{{ t(APP_ID, 'Session') }}</dt>
@@ -75,10 +78,6 @@ async function closeSession(): Promise<void> {
 			<dt>{{ t(APP_ID, 'Engine') }}</dt>
 			<dd>{{ ENGINE_NAME }}</dd>
 		</dl>
-
-		<NcNoteCard type="warning">
-			{{ t(APP_ID, 'The screen is not shown here yet — streaming lands in a later release.') }}
-		</NcNoteCard>
 
 		<NcButton v-if="!closed" :disabled="closing" @click="closeSession">
 			{{ closing ? t(APP_ID, 'Closing…') : t(APP_ID, 'Close session') }}

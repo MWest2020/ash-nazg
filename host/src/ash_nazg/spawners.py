@@ -24,7 +24,9 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import secrets
 import shutil
+import signal
 import socket
 from dataclasses import dataclass
 from pathlib import Path
@@ -34,6 +36,9 @@ from ash_nazg.dispatch import SessionHandle
 from ash_nazg.engines import FileMeta, SessionConfig
 
 logger = logging.getLogger(__name__)
+
+# The account name inside the session's own KasmVNC password file.
+VNC_USER: Final[str] = "session"
 
 # --- Stub --------------------------------------------------------------------
 
@@ -102,6 +107,7 @@ class _RunningSession:
     display: int
     port: int
     directory: Path
+    secret: str
 
 
 class InImageSpawner:
@@ -197,8 +203,22 @@ class InImageSpawner:
 
         display = self.first_display + slot
         port = self.base_port + slot
+        # A killed Xvnc leaves its display lock behind, and the next
+        # server on that display exits 29 without explaining itself. The
+        # slot is ours, so anything still lying around for it is stale.
+        self._clear_display_locks(display)
+        # Credentials belong to this session, not to the image: a baked-in
+        # password is identical on every install and survives redeployment.
+        # It lives in the session directory and dies with it.
+        secret = secrets.token_urlsafe(24)
+        password_file = directory / "kasmpasswd"
+        await self._write_password_file(password_file, secret)
         env = self._session_env(
-            display=display, port=port, local_path=local_path, directory=directory
+            display=display,
+            port=port,
+            local_path=local_path,
+            directory=directory,
+            password_file=password_file,
         )
         log_path = directory / "engine.log"
         with log_path.open("wb") as log:
@@ -210,6 +230,13 @@ class InImageSpawner:
                 env=env,
                 cwd=str(directory),
                 preexec_fn=self._lower_priority,
+                # Own process group. `kasmvncserver` is a launcher: it
+                # starts Xvnc and returns, and Xvnc starts the emulator.
+                # Signalling only the child left both of those running —
+                # the next session then found "its" port already open,
+                # attached to the previous session's server, and answered
+                # 401 because the credentials no longer matched.
+                start_new_session=True,
             )
         session = _RunningSession(
             session_id=session_id,
@@ -217,6 +244,7 @@ class InImageSpawner:
             display=display,
             port=port,
             directory=directory,
+            secret=secret,
         )
         self._sessions[session_id] = session
 
@@ -237,6 +265,16 @@ class InImageSpawner:
             port=port,
         )
 
+    def port_for(self, session_id: str) -> int | None:
+        """The port this session's VNC server listens on, or None."""
+        session = self._sessions.get(session_id)
+        return session.port if session else None
+
+    def credentials_for(self, session_id: str) -> tuple[str, str] | None:
+        """(user, secret) for this session's VNC server, or None."""
+        session = self._sessions.get(session_id)
+        return (VNC_USER, session.secret) if session else None
+
     async def terminate(self, session_id: str) -> None:
         """SIGTERM, then SIGKILL after the grace period (sandbox spec)."""
         session = self._sessions.pop(session_id, None)
@@ -244,13 +282,20 @@ class InImageSpawner:
             return
         self._slots.discard(session.display - self.first_display)
         if session.process.returncode is None:
-            session.process.terminate()
+            # Ask KasmVNC to stop first: it tears its display down and
+            # removes the lock file. The group sweep below is for
+            # whatever ignores that.
+            await self._kill_display(session.display)
+            self._signal_group(session, signal.SIGTERM)
             try:
                 await asyncio.wait_for(session.process.wait(), timeout=_GRACE_SECONDS)
             except TimeoutError:
                 logger.warning("session %s ignored SIGTERM; killing", session_id)
-                session.process.kill()
+                self._signal_group(session, signal.SIGKILL)
                 await session.process.wait()
+        # The group outlives the leader: Xvnc and the emulator are its
+        # children, not the launcher's. Sweep whatever is left.
+        self._signal_group(session, signal.SIGKILL)
         shutil.rmtree(session.directory, ignore_errors=True)
         logger.info("in-image session %s terminated", session_id)
 
@@ -259,6 +304,36 @@ class InImageSpawner:
             await self.terminate(session_id)
 
     # --- internals ---------------------------------------------------------
+
+    async def _kill_display(self, display: int) -> None:
+        """`kasmvncserver -kill :N` — the graceful stop, lock file included."""
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "kasmvncserver", "-kill", f":{display}",
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
+            await asyncio.wait_for(proc.wait(), timeout=10)
+        except (OSError, TimeoutError) as exc:
+            logger.info("kasmvncserver -kill :%d did not complete: %s", display, exc)
+
+    def _clear_display_locks(self, display: int) -> None:
+        for path in (Path(f"/tmp/.X{display}-lock"),  # noqa: S108 — X11's own paths
+                     Path(f"/tmp/.X11-unix/X{display}")):  # noqa: S108
+            try:
+                path.unlink()
+                logger.info("removed stale %s from a previous session", path)
+            except FileNotFoundError:
+                pass
+            except OSError as exc:
+                logger.warning("could not remove %s: %s", path, exc)
+
+    def _signal_group(self, session: _RunningSession, sig: int) -> None:
+        """Signal the whole session process group; missing is fine."""
+        try:
+            os.killpg(session.process.pid, sig)
+        except (ProcessLookupError, PermissionError):
+            pass
 
     def _claim_slot(self) -> int:
         for slot in range(1, self.max_sessions + 1):
@@ -270,8 +345,32 @@ class InImageSpawner:
             "close a session before starting another"
         )
 
+    async def _write_password_file(self, path: Path, secret: str) -> None:
+        """Ask kasmvncpasswd to write the session's password file."""
+        proc = await asyncio.create_subprocess_exec(
+            "kasmvncpasswd", "-u", VNC_USER, "-wo", str(path),
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        # The tool asks for the password twice, then for a read-only one
+        # (empty = none).
+        _, stderr = await proc.communicate(f"{secret}\n{secret}\n\n".encode())
+        if proc.returncode != 0:
+            raise RuntimeError(
+                "kasmvncpasswd failed "
+                f"(exit {proc.returncode}): {stderr.decode(errors='replace').strip()}"
+            )
+        path.chmod(0o600)
+
     def _session_env(
-        self, *, display: int, port: int, local_path: Path, directory: Path
+        self,
+        *,
+        display: int,
+        port: int,
+        local_path: Path,
+        directory: Path,
+        password_file: Path,
     ) -> dict[str, str]:
         # A deliberately small environment: the shim's own variables
         # (APP_SECRET above all) have no business in an engine session.
@@ -284,6 +383,7 @@ class InImageSpawner:
             "VNC_DISPLAY": f":{display}",
             "VNC_WEBSOCKET_PORT": str(port),
             "XSTARTUP_PATH": str(directory / "xstartup"),
+            "VNC_PASSWORD_FILE": str(password_file),
         }
 
     def _lower_priority(self) -> None:

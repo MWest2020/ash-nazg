@@ -17,46 +17,71 @@ Alles hieronder staat of valt hiermee. Niet bouwen voor het antwoord er is.
 
 ## 2. De relay
 
-- [ ] 2.1 `GET /sessions/{id}/stream/{pad}` proxiet HTTP naar de KasmVNC-poort
+- [x] 2.1 `GET /sessions/{id}/stream/{pad}` proxiet HTTP naar de KasmVNC-poort
       van die sessie op 127.0.0.1. De browser bereikt dit via
       `/exapps/ash_nazg/…` (zie §1); de `app_api/proxy`-URL kan geen upgrade
       dragen.
-- [ ] 2.2 Websocket-upgrade op hetzelfde pad, bidirectioneel, met een nette
+- [x] 2.2 Websocket-upgrade op hetzelfde pad, bidirectioneel, met een nette
       afsluiting als de sessie stopt.
-- [ ] 2.3 Autorisatie vóór de eerste byte: admin (zoals `/run`) én eigenaar van
+- [x] 2.3 Autorisatie vóór de eerste byte: admin (zoals `/run`) én eigenaar van
       de sessie. Onbekende of andermans sessie → 404, niet 403 (geen orakel
       voor sessie-id's).
-- [ ] 2.4 Route in `appinfo/info.xml` (GET, ADMIN), inclusief het
+- [x] 2.4 Route in `appinfo/info.xml` (GET, ADMIN), inclusief het
       websocket-pad.
 
 ## 3. Sessie-eigen KasmVNC-inloggegevens
 
-- [ ] 3.1 Spawner genereert een geheim per sessie en schrijft het
+- [x] 3.1 Spawner genereert een geheim per sessie en schrijft het
       wachtwoordbestand in de sessiemap (0600).
-- [ ] 3.2 Het gebakken `demo`-wachtwoord verdwijnt uit het image.
-- [ ] 3.3 De relay geeft de client wat hij nodig heeft; het geheim staat nooit
+- [x] 3.2 Het gebakken `demo`-wachtwoord verdwijnt uit het image.
+- [x] 3.3 De relay geeft de client wat hij nodig heeft; het geheim staat nooit
       in een URL die in een browsergeschiedenis of proxy-log belandt.
 
 ## 4. Beeld in de browser
 
-- [ ] 4.1 `IframeHost.vue` laadt KasmVNC's eigen webclient via het relay-pad.
-- [ ] 4.2 `SessionStatus.vue` toont het beeld in plaats van de melding dat het
+- [x] 4.1 `IframeHost.vue` laadt KasmVNC's eigen webclient via het relay-pad.
+- [x] 4.2 `SessionStatus.vue` toont het beeld in plaats van de melding dat het
       er nog niet is; de sluitknop blijft.
-- [ ] 4.3 Een gesloten of verlopen sessie geeft een leesbare melding in het
+- [x] 4.3 Een gesloten of verlopen sessie geeft een leesbare melding in het
       kader, geen kapot iframe.
 
 ## 5. Idle-timeout op echte activiteit
 
-- [ ] 5.1 De relay stempelt activiteit per sessie.
-- [ ] 5.2 Geen verkeer gedurende het venster (default 900 s) → dezelfde
+- [x] 5.1 De relay stempelt activiteit per sessie.
+- [x] 5.2 Geen verkeer gedurende het venster (default 900 s) → dezelfde
       afsluitweg als `DELETE /sessions/{id}`, inclusief het vrijgeven van de
       claim.
-- [ ] 5.3 De voorwaardelijke eis in de `engines`-spec wordt onvoorwaardelijk.
+- [x] 5.3 De voorwaardelijke eis in de `engines`-spec wordt onvoorwaardelijk.
 
 ## 6. Nameten
 
-- [ ] 6.1 Unittests: autorisatie (eigenaar/vreemde/onbekend), relay-fouten,
+- [x] 6.1 Unittests: autorisatie (eigenaar/vreemde/onbekend), relay-fouten,
       idle-afsluiting.
-- [ ] 6.2 Level-3 krijgt een browserstap: run starten, beeld zien, sluiten.
-      De bestaande curl-stappen blijven.
-- [ ] 6.3 Het security-model bijwerken: wat de relay wél en niet afschermt.
+- [x] 6.2 Level-3 bewijst de relay met curl (client 200, upgrade 101) — die
+      stappen draaien overal. Het beeld zelf vraagt een browser en zit in
+      `scripts/e2e-playwright/verify-stream.js`: die meet dat het canvas het
+      sessiescherm draagt en laat een screenshot achter. Beide vandaag groen.
+- [x] 6.3 Het security-model bijwerken: wat de relay wél en niet afschermt.
+
+## 7. Wat het bouwen aan het licht bracht
+
+Vier dingen die geen ontwerp had voorspeld, alle vier nagemeten en opgelost;
+ze staan hier omdat ze het soort fout zijn dat je een middag kost:
+
+- [x] 7.1 **KasmVNC antwoordt een upgrade zonder `Origin` met 404.** Niet 400,
+      niet 403 — een kale "dit pad bestaat niet", waardoor je het verkeerde
+      websocket-pad gaat zoeken. Ook de subprotocol-header `binary` is nodig.
+- [x] 7.2 **De client verbindt niet zonder `path=`.** Hij bouwt zijn
+      websocket-URL vanaf de origin (`/websockify`), niet vanaf de pagina, en
+      blijft anders stil op zijn verbindingsscherm staan — zonder één poging.
+- [x] 7.3 **De pagina moest van de proxy-URL af.** Nextcloud levert die met zijn
+      eigen CSP, die onze bundel weigert (geen nonce). De sessiepagina draait nu
+      op `/exapps/…`, waar ook de stream loopt.
+- [x] 7.4 **Assets stonden absoluut** (`/static/…`) en resolveerden tegen
+      Nextclouds root: pagina rendert, Vue mount nooit. Nu relatief aan het
+      prefix dat de browser gebruikte. Gold ook voor de admin-pagina.
+- [x] 7.5 **Sluiten liet KasmVNC leven.** `kasmvncserver` is een starter: hij
+      zet Xvnc op en keert terug. Alleen het kind signaleren liet Xvnc én de
+      emulator draaien, waarna de volgende sessie "zijn" poort al open vond,
+      aan de vórige server hing en 401 gaf. Nu een eigen procesgroep, een
+      nette `-kill :N` en opruimen van het display-slot.

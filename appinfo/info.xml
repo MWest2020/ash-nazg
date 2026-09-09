@@ -157,6 +157,22 @@ losse packages toegevoegd.
                 <verb>GET</verb>
                 <access_level>ADMIN</access_level>
             </route>
+            <!--
+                The stream. Declared separately from the session page so
+                the intent is readable, even though the pattern above
+                would already match it.
+
+                A browser reaches this over /exapps/<appid>/… , not over
+                /index.php/apps/app_api/proxy/… : that proxy is a PHP
+                controller and cannot return 101 Switching Protocols, so
+                the websocket handshake dies there. Measured; see the
+                streaming-proxy change's design.md.
+            -->
+            <route>
+                <url>^/?sessions/.+/stream/.*$</url>
+                <verb>GET</verb>
+                <access_level>ADMIN</access_level>
+            </route>
             <route>
                 <url>^/?sessions/.+$</url>
                 <verb>DELETE</verb>

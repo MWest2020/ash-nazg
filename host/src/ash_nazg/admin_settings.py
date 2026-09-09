@@ -24,11 +24,11 @@ import base64
 import html
 from typing import Final
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse
 
 from ash_nazg.appapi import APP_ID
-from ash_nazg.bundle import bundle_tags, load_manifest
+from ash_nazg.bundle import bundle_tags, load_manifest, relative_base
 from ash_nazg.initial_state import AdminInitialState, build_initial_state
 
 # Vite uses the source-relative entry path as the manifest key.
@@ -52,7 +52,7 @@ def _initial_state_input(state: AdminInitialState) -> str:
 
 
 @router.get("/admin/settings", response_class=HTMLResponse)
-async def admin_settings_page() -> HTMLResponse:
+async def admin_settings_page(request: Request) -> HTMLResponse:
     """Render the admin settings HTML shell."""
     state = build_initial_state()
     manifest = load_manifest()
@@ -66,7 +66,7 @@ async def admin_settings_page() -> HTMLResponse:
 <body>
     {_initial_state_input(state)}
     <div id="ash-nazg-admin-settings"></div>
-    {bundle_tags(manifest, ADMIN_ENTRY_KEY)}
+    {bundle_tags(manifest, ADMIN_ENTRY_KEY, relative_base(request.url.path))}
 </body>
 </html>
 """
