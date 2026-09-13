@@ -251,7 +251,7 @@ handshake — and *that* is what `--wait-finish` blocks on.
         sessie-eigen inloggegevens, en de idle-timeout op echte
         activiteit. Eerste taak daar is een meting: overleeft een
         websocket de hele keten? Alles erna hangt daaraan.
-- [ ] 12.2 Archive `wire-dosbox-engine` once §2 (GHCR) is done. §1 en
+- [x] 12.2 Archive `wire-dosbox-engine` once §2 (GHCR) is done. §1 en
         §3–§11 zijn groen en een echte run produceert DOSBox-X-uitvoer
         ("ASH NAZG OK", nagemeten in de ExApp-container).
 

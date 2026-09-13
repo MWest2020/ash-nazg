@@ -11,7 +11,9 @@ that is specific to DOS lives behind a protocol: an engine is an independently
 versioned OCI image on a pinned tag, it is admin-configurable, it gets one
 container per session, and that session has a bounded life. Wine, RetroArch, a
 JVM — those are new images against this protocol, not a new host.
+
 ## Requirements
+
 ### Requirement: Engines implement a stable Engine protocol
 
 Every engine SHALL implement the `Engine` Python protocol defined in the
@@ -88,61 +90,86 @@ engine SHALL handle binaries detected as `pe32` (Windows .exe) and
   - `entrypoint_args`: command-line invoking dosbox-x with the resolved
     file path within `/mnt/files`.
 
-### Requirement: Engine images use pinned tags, never :latest
+### Requirement: Engine session lifecycle bounded
 
-OCI references in engine session configs SHALL use immutable tags
-(semver or sha256 digest). The host SHALL refuse to start a container
-referencing an engine image with tag `latest` or no tag at all.
+Engine sessions SHALL be terminated under any of these conditions:
 
-#### Scenario: Latest tag refused
+1. The user closes the session (`DELETE /sessions/{id}`).
+2. Maximum session duration reached (configurable, default 4 hours).
+3. Host container is shut down or restarted.
 
-- **GIVEN** an engine session config with image
-  `ghcr.io/example/engine:latest`
-- **WHEN** the host attempts to spawn the container
-- **THEN** the host SHALL fail fast with error "engine images must use
-  pinned tags"
-- **AND** the failure SHALL be logged as an audit event.
+Termination SHALL send SIGTERM, wait 30 seconds for the process tree to
+exit, and then SIGKILL. It SHALL remove the session's directory and
+SHALL release the (user, file) claim that makes a second Run of the same
+file return 409 — a session that ends without releasing its claim would
+lock the user out of that file for the life of the host.
 
-### Requirement: One engine container per session
+Idle-based termination SHALL apply: the stream passes through the host's
+own relay, which reports per-session activity, so the idle window is
+measured where it is actually observable rather than guessed.
 
-The host SHALL spawn a fresh engine container for every Run request.
-Containers SHALL NOT be reused across sessions, even for the same user
-and same binary.
+#### Scenario: Maximum duration enforced
 
-#### Scenario: Sequential runs each get fresh containers
+- **GIVEN** a session that has run for its configured maximum duration
+- **WHEN** that moment passes
+- **THEN** the host SHALL terminate the session
+- **AND** SHALL release its claim, so the same file can be run again.
+
+#### Scenario: Idle timeout enforced
+
+- **GIVEN** a session that has carried no stream traffic in either
+  direction for the configured idle window
+- **WHEN** the window elapses
+- **THEN** the host SHALL terminate the session the same way an explicit
+  close does, releasing its claim.
+
+#### Scenario: Host restart cleans up engines
+
+- **GIVEN** sessions running when the host shuts down
+- **WHEN** the host process stops
+- **THEN** it SHALL terminate every session it started
+- **AND** SHALL NOT attempt to reattach to them on the next start.
+
+### Requirement: One engine session per Run, never reused
+
+The host SHALL start a fresh engine process tree for every Run request,
+in a private per-session directory, and SHALL NOT reuse a session across
+Run requests — not even for the same user and the same binary.
+
+#### Scenario: Sequential runs each get a fresh session
 
 - **GIVEN** a user runs `keen1.exe`, closes the session, then runs
   `keen1.exe` again
 - **WHEN** the second run starts
-- **THEN** a new engine container SHALL be spawned with a new container
-  ID
-- **AND** the previous container's filesystem state SHALL NOT influence
-  the new session.
+- **THEN** a new session SHALL be started with a new session id and a new
+  session directory
+- **AND** the previous session's directory SHALL have been removed, so
+  its state cannot influence the new session.
 
-### Requirement: Engine session lifecycle bounded
+#### Scenario: Concurrent sessions are bounded
 
-Engine containers SHALL be terminated under any of these conditions:
+- **GIVEN** the configured maximum number of concurrent sessions is
+  already running
+- **WHEN** another Run request arrives
+- **THEN** the host SHALL refuse it with a message naming the limit,
+  rather than starting a session it cannot isolate.
 
-1. User explicitly closes the session via the frontend.
-2. Idle timeout reached (configurable, default 900 seconds).
-3. Maximum session duration reached (configurable, default 4 hours).
-4. Host container is shut down or restarted.
+### Requirement: The engine ships in the ExApp image, pinned
 
-#### Scenario: Idle timeout enforced
+The engine SHALL be part of the ExApp image rather than a separately
+spawned container image. `appinfo/info.xml` SHALL pin that image with a
+concrete `<image-tag>`, never `latest` — the tag is what an admin
+installs and what an audit points at.
 
-- **GIVEN** an engine container running for 14 minutes 59 seconds with
-  no websocket activity
-- **WHEN** one more second passes with no input
-- **THEN** the host SHALL send SIGTERM to the engine container
-- **AND** wait 30 seconds for graceful shutdown
-- **AND** then SIGKILL if still running.
+#### Scenario: Latest tag refused
 
-#### Scenario: Host restart cleans up engines
+- **GIVEN** `appinfo/info.xml` with `<image-tag>latest</image-tag>`
+- **WHEN** the image manifest check runs
+- **THEN** it SHALL fail with "engine images must use pinned tags".
 
-- **GIVEN** three engine containers running when the host container
-  restarts
-- **WHEN** the host comes back up
-- **THEN** the host SHALL detect orphaned containers (labeled
-  `app=ash-nazg`) and stop them
-- **AND** SHALL NOT attempt to reattach to their sessions.
+#### Scenario: The engine is present in the image
 
+- **WHEN** the host's self-test runs its `engine-runtime` check
+- **THEN** it SHALL verify that the emulator and the VNC server are
+  present in this image and that a session slot is free
+- **AND** SHALL report the missing binary by name if either is absent.
