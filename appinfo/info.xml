@@ -102,8 +102,12 @@ losse packages toegevoegd.
         registration time; not part of the canonical info.xsd.
 
         - <image-tag> MUST be a concrete version, never `latest`. The
-          scaffold uses 0.0.0-scaffold; the release pipeline rewrites
-          this on every tagged build.
+          release pipeline rewrites this on every tagged build; a
+          development tag comes from the manual run of build-host.yml
+          (workflow_dispatch, `tag` input), which is guarded by the same
+          pattern scripts/verify-info-xml.sh checks here. Keep this in
+          step with ENGINE_IMAGE in host/src/ash_nazg/engines/dosbox_x.py
+          — the host and the engine are pulled as a pair.
         - <scopes> must match `host/src/ash_nazg/appapi.py::REQUIRED_SCOPES`.
           The two are kept in lockstep manually for now; the
           `wire-dosbox-engine` change adds a CI consistency check.
@@ -112,7 +116,7 @@ losse packages toegevoegd.
         <docker-install>
             <registry>ghcr.io</registry>
             <image>mwest2020/ash-nazg-host</image>
-            <image-tag>0.0.0-scaffold</image-tag>
+            <image-tag>0.1.0-wire-dev</image-tag>
         </docker-install>
         <scopes>
             <value>FILES</value>

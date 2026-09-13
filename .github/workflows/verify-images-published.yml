@@ -34,9 +34,13 @@ jobs:
       - name: derive tag
         id: tag
         shell: bash
+        # Through env, not interpolated into the script body: an input that
+        # lands in the shell source is an input that can be a shell command.
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
         run: |
-          if [[ -n "${{ inputs.tag }}" ]]; then
-            tag="${{ inputs.tag }}"
+          if [[ -n "${INPUT_TAG}" ]]; then
+            tag="${INPUT_TAG}"
           elif [[ "${GITHUB_REF}" == refs/tags/* ]]; then
             tag="${GITHUB_REF#refs/tags/}"
           else
@@ -87,7 +91,28 @@ jobs:
           fi
           echo "::endgroup::"
 
+      # The App Store installs whatever <image-tag> says, not whatever this
+      # gate inspected. If those two drift, the gate is green and the users
+      # get the wrong image — which is the one failure this workflow exists
+      # to make impossible.
+      - name: info.xml points at the version that was verified
+        uses: actions/checkout@v4
+      - name: compare <image-tag> with the verified version
+        env:
+          VERSION: ${{ steps.tag.outputs.version }}
+        shell: bash
+        run: |
+          declared="$(python3 -c "import xml.etree.ElementTree as ET; \
+            print(ET.parse('appinfo/info.xml').find('./external-app/docker-install/image-tag').text.strip())")"
+          echo "info.xml declares: ${declared}"
+          if [[ "${declared}" != "${VERSION}" ]]; then
+            echo "::error ::<image-tag> is '${declared}' but the verified images are '${VERSION}'"
+            echo "::error ::bump appinfo/info.xml (and ENGINE_IMAGE in host/src/ash_nazg/engines/dosbox_x.py) before releasing"
+            exit 1
+          fi
+
       - name: summary
         run: |
           echo "Both ash-nazg images present at version ${{ steps.tag.outputs.version }}."
+          echo "appinfo/info.xml points at the same version."
           echo "App Store submission workflow may proceed."

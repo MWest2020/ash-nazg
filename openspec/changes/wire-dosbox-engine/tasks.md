@@ -93,26 +93,33 @@ Validates the App Store distribution path *before* writing engine
 wiring on top. If GHCR pulls fail in HaRP, no amount of dispatcher
 code helps.
 
-- [ ] 2.1 Push host + engine images to GHCR under a `wire-dosbox-engine`
-        development tag (e.g. `0.1.0-wire-dev`) — this is the first
-        time `build-host.yml` and `build-engine-dosbox.yml` actually
-        push from a non-tag context. Use a temp branch + the
-        existing workflows' `type=ref,event=branch` tag pattern.
-- [ ] 2.2 Update `appinfo/info.xml` `<image-tag>` to the same
-        `0.1.0-wire-dev` value (still no `latest`; the
-        `verify-info-xml.sh` allowlist still passes).
+- [x] 2.1 Push host + engine images to GHCR under a `wire-dosbox-engine`
+        development tag (`0.1.0-wire-dev`). The temp-branch route in this
+        task does not work: both workflows trigger only on `main` and on
+        `v*.*.*`, so `type=ref,event=branch` can never produce anything but
+        `main`. Solved with a `workflow_dispatch` + `tag` input on both
+        workflows (PR #5), guarded by the same semver-ish pattern
+        `scripts/verify-info-xml.sh` enforces. Both images carry the tag.
+- [x] 2.2 Update `appinfo/info.xml` `<image-tag>` to the same
+        `0.1.0-wire-dev` value (still no `latest`; the pattern in
+        `verify-info-xml.sh` still passes). `ENGINE_IMAGE` in
+        `engines/dosbox_x.py` already pointed at this tag — host and engine
+        are pulled as a pair, so they are now in step.
 - [x] 2.3 Re-run the level-3 verifier against the now-rewritten
         compose stack. HaRP pulls from `ghcr.io/...` and spawns a
         fresh container — no `localhost/ash-nazg-host` dependency.
-- [ ] 2.4 If the pull fails on auth, document the credential
-        requirement (HaRP needs a GHCR token for private repos;
-        public repos need none). For our public repo, expect no
-        auth needed.
-- [ ] 2.5 The `verify-images-published.yml` workflow (already
-        added in `init-mvp-runtime`) gates tag-push releases on
-        `docker manifest inspect` of both images. Verify it still
-        passes for the dev tag, then keep it as the App Store
-        submission gate it was always meant to be.
+- [x] 2.4 No auth needed, measured rather than expected. On the lab VM
+        (`ash-nazg-lab`, 2026-09-13), after `docker logout ghcr.io`, both
+        images pull anonymously:
+        host `sha256:c792cc2a…`, dosbox-x `sha256:2524b513…`, both amd64.
+        A GHCR token is therefore only a private-repo requirement.
+- [x] 2.5 `verify-images-published.yml` verified green on the dev tag.
+        Two things fixed while looking: the `tag` input was interpolated
+        into the shell body (an input that reaches the shell source can be
+        a shell command) and now goes through `env`; and the gate did not
+        compare `<image-tag>` against the version it inspected — so it could
+        be green while the App Store installed a different image, which is
+        the one failure it exists to prevent.
 
 ## 3. Engine registry
 
