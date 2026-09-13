@@ -1,7 +1,24 @@
 # dispatch Specification
 
 ## Purpose
-TBD - created by archiving change wire-dosbox-engine. Update Purpose after archive.
+
+The step between "we know what this file is" and "an engine is running it":
+picking which engine gets the job.
+
+Detection says what a file is; engines say what they can handle. This capability
+is the small, boring thing in between, and it is deliberately small — the first
+registered, enabled engine that claims the file wins. Not a scoring function, not
+a negotiation. With one engine in v1 that choice is trivial, and the point is
+that it stays trivial when there are four: the ordering is explicit and the
+admin's enable switch is what decides, so "why did it open in DOSBox" always has
+a one-sentence answer.
+
+The other requirement here is the self-test, and it earns its place by reporting
+**real** per-check status. The scaffold returned the canonical four-check shape
+with every value `skipped`, which looks exactly like a passing self-test to
+anything that only counts failures. A self-test that cannot say "I did not
+actually check this" is not a diagnostic; it is decoration on an admin page.
+
 
 ## Requirements
 
