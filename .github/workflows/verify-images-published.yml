@@ -67,7 +67,12 @@ jobs:
           VERSION: ${{ steps.tag.outputs.version }}
         shell: bash
         run: |
-          ref="ghcr.io/${REPO_OWNER}/ash-nazg-host:${VERSION}"
+          # OCI repository names must be lowercase; github.repository_owner
+          # is not (MWest2020). docker/metadata-action lowercases this for
+          # us in the build workflows, so the raw shell here was the only
+          # place it bit — and it bit every run this gate ever had.
+          owner="${REPO_OWNER,,}"
+          ref="ghcr.io/${owner}/ash-nazg-host:${VERSION}"
           echo "::group::docker manifest inspect ${ref}"
           if ! docker manifest inspect "${ref}"; then
             echo "::error ::host image not found at ${ref}"
@@ -82,7 +87,12 @@ jobs:
           VERSION: ${{ steps.tag.outputs.version }}
         shell: bash
         run: |
-          ref="ghcr.io/${REPO_OWNER}/ash-nazg-dosbox-x:${VERSION}"
+          # OCI repository names must be lowercase; github.repository_owner
+          # is not (MWest2020). docker/metadata-action lowercases this for
+          # us in the build workflows, so the raw shell here was the only
+          # place it bit — and it bit every run this gate ever had.
+          owner="${REPO_OWNER,,}"
+          ref="ghcr.io/${owner}/ash-nazg-dosbox-x:${VERSION}"
           echo "::group::docker manifest inspect ${ref}"
           if ! docker manifest inspect "${ref}"; then
             echo "::error ::dosbox-x image not found at ${ref}"
