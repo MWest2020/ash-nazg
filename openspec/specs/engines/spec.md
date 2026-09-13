@@ -1,7 +1,16 @@
 # engines Specification
 
 ## Purpose
-TBD - created by archiving change init-mvp-runtime. Update Purpose after archive.
+
+The contract every runtime engine keeps, so that adding one is a drop-in rather
+than a refactor.
+
+The MVP ships exactly one engine (dosbox-x), and the reason this capability
+exists anyway is that "one engine" is a choice we intend to outgrow. Everything
+that is specific to DOS lives behind a protocol: an engine is an independently
+versioned OCI image on a pinned tag, it is admin-configurable, it gets one
+container per session, and that session has a bounded life. Wine, RetroArch, a
+JVM — those are new images against this protocol, not a new host.
 ## Requirements
 ### Requirement: Engines implement a stable Engine protocol
 

@@ -101,20 +101,16 @@ rules:
     - Every requirement maps to at least one acceptance scenario.
     - Distinguish host (the ExApp container) from engine (the sidecar)
       in every requirement — these have different security models.
-    - For any user-uploaded content: explicitly state validation rules
-      (magic bytes, size limits, refused formats).
+    - 'For any user-uploaded content: explicitly state validation rules (magic bytes, size limits, refused formats).'
 
   design:
     - Include a sequence diagram (or sequence-as-text) for the upload→detect→
       dispatch→execute→stream→writeback flow.
     - Document the AppAPI integration points used (which scopes, which
       endpoints, which webhook events).
-    - For each engine added: document the OCI base image, the streaming
-      protocol (KasmVNC, noVNC, etc.), the file-mount strategy.
+    - 'For each engine added: document the OCI base image, the streaming protocol (KasmVNC, noVNC, etc.), the file-mount strategy.'
 
   tasks:
-    - Group tasks by component: host-shim, engine-dosbox, frontend-files-action,
-      frontend-iframe-host, ci, docs.
+    - 'Group tasks by component: host-shim, engine-dosbox, frontend-files-action, frontend-iframe-host, ci, docs.'
     - Each task is independently testable.
-    - First task in any change must be: "verify the change is implementable
-      against current AppAPI version" with a concrete check command.
+    - 'First task in any change must be: "verify the change is implementable against current AppAPI version" with a concrete check command.'

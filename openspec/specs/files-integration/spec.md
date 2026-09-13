@@ -1,7 +1,16 @@
 # files-integration Specification
 
 ## Purpose
-TBD - created by archiving change init-mvp-runtime. Update Purpose after archive.
+
+How the app meets the user's files: where a run starts, where its output lands,
+and what the engine can see of Nextcloud.
+
+The whole promise is that nothing leaves Files. A binary is launched from where
+it sits, its directory is its working directory, its output comes back beside it,
+and the engine reaches all of that through a WebDAV mount scoped to the session
+rather than through a copy on the side. The limits here — a size ceiling,
+detecting a second hand on the same file — are what keep that promise from
+becoming a way to fill a disk or silently overwrite work.
 ## Requirements
 ### Requirement: Files action registered for supported file types
 

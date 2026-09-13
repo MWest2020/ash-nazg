@@ -1,7 +1,15 @@
 # detection Specification
 
 ## Purpose
-TBD - created by archiving change init-mvp-runtime. Update Purpose after archive.
+
+How Ash Nazg decides what a file *is*, before anything is allowed to run it.
+
+A runtime that guesses from a file name is a runtime that can be talked into
+running the wrong thing by renaming it. So detection reads magic bytes first and
+treats the extension as a hint, never as an answer; it happens before an engine
+is chosen, so engine selection can never be the thing that decides what a file
+is; and it leaves a record, because "why did it run in DOSBox" has to be
+answerable after the fact.
 ## Requirements
 ### Requirement: Binary type detection by magic bytes
 

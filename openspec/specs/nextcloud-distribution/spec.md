@@ -1,7 +1,15 @@
 # nextcloud-distribution Specification
 
 ## Purpose
-TBD - created by archiving change init-mvp-runtime. Update Purpose after archive.
+
+How an admin gets Ash Nazg, and how they can tell it works.
+
+An ExApp that needs a shell to install is not distributed, it is deployed by its
+author. So the bar here is the App Store: install without touching a terminal, a
+manifest that declares everything AppAPI needs, a settings page that actually
+does something, and a first run that says what to do next. The update path is
+part of it — an app you cannot safely upgrade is one you install once and then
+never trust again.
 ## Requirements
 ### Requirement: Installable via Nextcloud App Store without shell access
 
