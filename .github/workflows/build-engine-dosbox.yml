@@ -1,6 +1,15 @@
 name: build-engine-dosbox
 
+# A manual run exists because the push triggers only ever produce `main` and
+# `sha-<commit>`, and `appinfo/info.xml` demands a semver-ish tag (see
+# scripts/verify-info-xml.sh). Without this, pointing the manifest at a real
+# image meant cutting a release tag for something that is not a release.
 on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "extra image tag, semver-ish (e.g. 0.1.0-wire-dev). No 'latest'."
+        required: true
   push:
     branches: [main]
     tags: ['v*.*.*']
@@ -26,6 +35,22 @@ jobs:
     name: build-and-push
     runs-on: ubuntu-latest
     steps:
+      - name: the manual tag must be one info.xml would accept
+        # The same pattern as scripts/verify-info-xml.sh. A manual run exists to
+        # produce a tag the manifest can point at; a tag it would reject is
+        # worse than no tag, because the image looks published and the app
+        # still cannot be installed.
+        if: github.event_name == 'workflow_dispatch'
+        # Through env, not interpolated into the script: an input that lands in
+        # the shell source is an input that can be a shell command.
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          if [[ "$TAG" == "latest" ]] || ! [[ "$TAG" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.+-]+)?$ ]]; then
+            echo "::error::tag '$TAG' is not semver-ish (X.Y.Z[-prerelease][+build]) — see scripts/verify-info-xml.sh"
+            exit 1
+          fi
+
       - uses: actions/checkout@v4
 
       - uses: docker/setup-qemu-action@v3
@@ -50,6 +75,7 @@ jobs:
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=sha,prefix=sha-
+            type=raw,value=${{ inputs.tag }},enable=${{ github.event_name == 'workflow_dispatch' }}
 
       - name: build (and push when not PR)
         uses: docker/build-push-action@v6
